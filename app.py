@@ -613,6 +613,11 @@ def _safe_int(value: object) -> int:
     return 0
 
 
+def _config_int(config: object, name: str, default: int) -> int:
+    value = _safe_int(getattr(config, name, default))
+    return value if value > 0 else default
+
+
 def _inflight_segments_label(inflight: dict) -> str:
     segments = inflight.get("segments")
     if not isinstance(segments, list) or not segments:
@@ -814,11 +819,13 @@ def _render_status(state: dict) -> None:
     config = state.get("config")
     provider_note = ""
     if config:
+        translation_concurrency = _config_int(config, "translation_concurrency", 4)
+        review_concurrency = _config_int(config, "review_concurrency", 4)
         provider_note = (
             f" | {_t('source_to_target')}: `{config.source_language} -> {config.target_language}`"
             f" | {_t('translator_provider')}: `{config.translator_provider}`, "
             f"{_t('review_provider')}: `{config.reviewer_provider}`"
-            f" | {_t('parallelism_status')}: `{config.translation_concurrency}/{config.review_concurrency}`"
+            f" | {_t('parallelism_status')}: `{translation_concurrency}/{review_concurrency}`"
         )
 
     st.subheader(_t("status"))

@@ -51,7 +51,7 @@ def review_translation(
         pending_reviews.append(PendingReview(segment=segment, translation=translation))
 
     if pending_reviews:
-        concurrency = _concurrency_limit(config.review_concurrency, len(pending_reviews))
+        concurrency = _concurrency_limit(getattr(config, "review_concurrency", 4), len(pending_reviews))
         model_name = getattr(client, "model_name", config.reviewer_provider)
         log_debug(
             "segments.review.parallel.start",

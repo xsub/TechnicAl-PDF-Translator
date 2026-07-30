@@ -161,7 +161,7 @@ def translate_segments(
     if pending_groups:
         if client is None:
             client = build_translator(config)
-        concurrency = _concurrency_limit(config.translation_concurrency, len(pending_groups))
+        concurrency = _concurrency_limit(getattr(config, "translation_concurrency", 4), len(pending_groups))
         model_name = getattr(client, "model_name", config.translator_provider)
         log_debug(
             "segments.translate.parallel.start",
