@@ -111,6 +111,18 @@ UI_TEXT = {
         "estimated_input_delta": "+~{tokens} input w toku",
         "estimated_total_delta": "+~{tokens} szac. w toku",
         "estimated_token_note": "Wartość w toku jest lokalnym szacunkiem input promptu. Finalne input/output/total po odpowiedzi podaje provider.",
+        "parallel_tasks_header": "Równoległe zadania LLM",
+        "parallel_tasks_caption": "To są requesty aktualnie wysłane do providera. Lista odświeża się po checkpointach.",
+        "parallel_task_status": "w toku",
+        "parallel_task_col_slot": "#",
+        "parallel_task_col_status": "status",
+        "parallel_task_col_operation": "operacja",
+        "parallel_task_col_segment": "segment",
+        "parallel_task_col_page": "strona",
+        "parallel_task_col_provider": "provider",
+        "parallel_task_col_model": "model",
+        "parallel_task_col_estimated_input": "~input tokens",
+        "parallel_task_col_source": "fragment źródła",
         "progress_stage": "Etap",
         "progress_segment": "segment",
         "progress_stage_progress": "postęp etapu",
@@ -242,6 +254,18 @@ UI_TEXT = {
         "estimated_input_delta": "+~{tokens} input in flight",
         "estimated_total_delta": "+~{tokens} est. in flight",
         "estimated_token_note": "The in-flight value is a local input-prompt estimate. Final input/output/total comes from the provider response.",
+        "parallel_tasks_header": "Parallel LLM tasks",
+        "parallel_tasks_caption": "These are requests currently sent to the provider. The list refreshes on checkpoints.",
+        "parallel_task_status": "in flight",
+        "parallel_task_col_slot": "#",
+        "parallel_task_col_status": "status",
+        "parallel_task_col_operation": "operation",
+        "parallel_task_col_segment": "segment",
+        "parallel_task_col_page": "page",
+        "parallel_task_col_provider": "provider",
+        "parallel_task_col_model": "model",
+        "parallel_task_col_estimated_input": "~input tokens",
+        "parallel_task_col_source": "source preview",
         "progress_stage": "Stage",
         "progress_segment": "segment",
         "progress_stage_progress": "stage progress",
@@ -597,6 +621,7 @@ def _render_token_usage_metrics(state: dict) -> None:
             )
         if estimated_input_tokens:
             st.caption(_t("estimated_token_note"))
+        _render_parallel_tasks(state, inflight)
     elif usage["requests"] == 0:
         st.caption(_t("no_token_usage_yet"))
 
@@ -633,6 +658,63 @@ def _inflight_segments_label(inflight: dict) -> str:
     remaining = len(segments) - len(labels)
     suffix = f" +{remaining}" if remaining > 0 else ""
     return ", ".join(labels) + suffix
+
+
+def _render_parallel_tasks(state: dict, inflight: dict) -> None:
+    requests = _inflight_requests(inflight)
+    if not requests:
+        return
+
+    segments_by_id = {
+        getattr(segment, "segment_id", ""): segment
+        for segment in state.get("segments", [])
+    }
+    operation = str(inflight.get("operation", "llm"))
+    provider = str(inflight.get("provider", "-"))
+    model = str(inflight.get("model", "-"))
+    rows = []
+    for index, request in enumerate(requests, start=1):
+        segment_id = str(request.get("segment_id") or inflight.get("segment_id") or "-")
+        segment = segments_by_id.get(segment_id)
+        rows.append(
+            {
+                _t("parallel_task_col_slot"): index,
+                _t("parallel_task_col_status"): _t("parallel_task_status"),
+                _t("parallel_task_col_operation"): operation,
+                _t("parallel_task_col_segment"): segment_id,
+                _t("parallel_task_col_page"): getattr(segment, "page_number", "-") if segment else "-",
+                _t("parallel_task_col_provider"): provider,
+                _t("parallel_task_col_model"): model,
+                _t("parallel_task_col_estimated_input"): _safe_int(request.get("estimated_input_tokens")),
+                _t("parallel_task_col_source"): _short_text(getattr(segment, "source_text", ""), 220) if segment else "",
+            }
+        )
+
+    st.markdown(f"##### :material/account_tree: {_t('parallel_tasks_header')}")
+    st.caption(_t("parallel_tasks_caption"))
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        height=min(360, 72 + 35 * len(rows)),
+    )
+
+
+def _inflight_requests(inflight: dict) -> list[dict]:
+    segments = inflight.get("segments")
+    if isinstance(segments, list) and segments:
+        return [
+            item if isinstance(item, dict) else {"segment_id": str(item)}
+            for item in segments
+        ]
+    if inflight.get("segment_id"):
+        return [
+            {
+                "segment_id": inflight.get("segment_id"),
+                "estimated_input_tokens": inflight.get("estimated_input_tokens"),
+            }
+        ]
+    return []
 
 
 def _status_update(status, *, label: str, state: str | None = None) -> None:
