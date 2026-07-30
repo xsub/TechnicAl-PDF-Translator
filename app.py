@@ -95,6 +95,18 @@ UI_TEXT = {
         "parallelism_status": "parallel",
         "source_to_target": "języki",
         "pipeline_progress_caption": "Postęp pipeline: tłumaczenia `{translations}/{segments}`, review `{reviews}/{segments}`.",
+        "translation_progress_metric": "Tłumaczenie",
+        "progress_to_pdf": "Postęp do PDF: tłumaczenie `{translation_percent}%` | review `{review_percent}%`.",
+        "translation_progress_bar": "Tłumaczenie {percent}% ({done}/{total})",
+        "review_progress_bar": "Review {percent}% ({done}/{total})",
+        "pdf_progress_delta": "T {translation_percent}% | R {review_percent}%",
+        "pdf_status_waiting": "czeka",
+        "pdf_status_progress": "w toku",
+        "pdf_status_needs_decisions": "decyzje",
+        "pdf_status_ready_to_generate": "generuj",
+        "pdf_status_download": "pobierz",
+        "pdf_status_missing": "brak pliku",
+        "review_findings_caption": "Findingi review: `{review_findings}`.",
         "parallelism_change_pending": (
             "Suwaki UI ustawione na `{ui_translation}/{ui_review}`, ale aktualny checkpoint joba ma "
             "`{job_translation}/{job_review}`. Zmiana zadziała przy następnym wznowieniu albo nowym jobie; "
@@ -171,6 +183,10 @@ UI_TEXT = {
         "rendering_after_accept": "Generuję PDF po zbiorczej akceptacji...",
         "rendering_start": "Startuję renderowanie...",
         "pdf_after_accept": "PDF wygenerowany po zbiorczej akceptacji",
+        "pdf_ready_to_generate": "Tłumaczenie i review są gotowe. Możesz teraz wygenerować PDF.",
+        "generate_pdf": "Generuj PDF",
+        "generating_pdf": "Generuję PDF...",
+        "pdf_generated": "PDF wygenerowany",
         "hide_and_restart": "Ukryj wynik w tej sesji i zacznij od nowa",
         "issue_filter": "Filtr problemów",
         "no_segments_filter": "Brak segmentów dla wybranego filtra.",
@@ -188,6 +204,7 @@ UI_TEXT = {
         "decisions_saved": "Decyzje zapisane i wynik wygenerowany",
         "showing_segments": "Pokazuję {shown} z {total} segmentów po filtrze.",
         "output_ready": "PDF wynikowy jest gotowy.",
+        "output_pdf_missing": "Checkpoint wskazuje PDF, ale plik nie istnieje na dysku: `{path}`.",
         "download_pdf": "Pobierz PDF",
         "download_report": "Pobierz raport JSON",
         "loaded_checkpoint": "Wczytałem ostatni zapisany checkpoint: `{job_id}` ze statusem `{status}`.",
@@ -247,6 +264,18 @@ UI_TEXT = {
         "parallelism_status": "parallel",
         "source_to_target": "languages",
         "pipeline_progress_caption": "Pipeline progress: translations `{translations}/{segments}`, review `{reviews}/{segments}`.",
+        "translation_progress_metric": "Translation",
+        "progress_to_pdf": "PDF progress: translation `{translation_percent}%` | review `{review_percent}%`.",
+        "translation_progress_bar": "Translation {percent}% ({done}/{total})",
+        "review_progress_bar": "Review {percent}% ({done}/{total})",
+        "pdf_progress_delta": "T {translation_percent}% | R {review_percent}%",
+        "pdf_status_waiting": "waiting",
+        "pdf_status_progress": "progress",
+        "pdf_status_needs_decisions": "decisions",
+        "pdf_status_ready_to_generate": "generate",
+        "pdf_status_download": "download",
+        "pdf_status_missing": "missing file",
+        "review_findings_caption": "Review findings: `{review_findings}`.",
         "parallelism_change_pending": (
             "The UI sliders are set to `{ui_translation}/{ui_review}`, but this job checkpoint has "
             "`{job_translation}/{job_review}`. The change applies on the next resume or new job; "
@@ -323,6 +352,10 @@ UI_TEXT = {
         "rendering_after_accept": "Generating PDF after bulk acceptance...",
         "rendering_start": "Starting rendering...",
         "pdf_after_accept": "PDF generated after bulk acceptance",
+        "pdf_ready_to_generate": "Translation and review are complete. You can generate the PDF now.",
+        "generate_pdf": "Generate PDF",
+        "generating_pdf": "Generating PDF...",
+        "pdf_generated": "PDF generated",
         "hide_and_restart": "Hide this result in this session and start again",
         "issue_filter": "Issue filter",
         "no_segments_filter": "No segments for the selected filter.",
@@ -340,6 +373,7 @@ UI_TEXT = {
         "decisions_saved": "Decisions saved and output generated",
         "showing_segments": "Showing {shown} of {total} segments after filtering.",
         "output_ready": "Output PDF is ready.",
+        "output_pdf_missing": "The checkpoint points to a PDF, but the file is missing on disk: `{path}`.",
         "download_pdf": "Download PDF",
         "download_report": "Download JSON report",
         "loaded_checkpoint": "Loaded the latest checkpoint: `{job_id}` with status `{status}`.",
@@ -1028,6 +1062,66 @@ def _run_translation(
         _status_update(status, label=_t("processed"), state="complete")
 
 
+def _progress_counts(state: dict) -> dict[str, int]:
+    segments_total = len(state.get("segments", []))
+    translations_done = len(state.get("translations", {}))
+    reviews_done = len(state.get("review_results", {}))
+    return {
+        "segments_total": segments_total,
+        "translations_done": translations_done,
+        "reviews_done": reviews_done,
+    }
+
+
+def _progress_percent(done: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    if done >= total:
+        return 100
+    return max(0, int(done * 100 / total))
+
+
+def _progress_ratio(done: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return min(max(done / total, 0.0), 1.0)
+
+
+def _output_pdf_exists(state: dict) -> bool:
+    output_pdf_path = state.get("output_pdf_path")
+    return bool(output_pdf_path) and Path(str(output_pdf_path)).exists()
+
+
+def _ready_for_pdf_generation(state: dict) -> bool:
+    if state.get("output_pdf_path") or state.get("unresolved_segments"):
+        return False
+
+    counts = _progress_counts(state)
+    total = counts["segments_total"]
+    if total <= 0:
+        return False
+
+    return (
+        counts["translations_done"] >= total
+        and counts["reviews_done"] >= total
+        and state.get("status") not in {"completed", "completed_with_output_warnings", "needs_human_review"}
+    )
+
+
+def _pdf_status_label(state: dict) -> str:
+    if _output_pdf_exists(state):
+        return _t("pdf_status_download")
+    if state.get("output_pdf_path"):
+        return _t("pdf_status_missing")
+    if state.get("unresolved_segments"):
+        return _t("pdf_status_needs_decisions")
+    if _ready_for_pdf_generation(state):
+        return _t("pdf_status_ready_to_generate")
+    if state.get("segments"):
+        return _t("pdf_status_progress")
+    return _t("pdf_status_waiting")
+
+
 def _render_status(state: dict) -> None:
     config = state.get("config")
     provider_note = ""
@@ -1073,15 +1167,68 @@ def _render_status(state: dict) -> None:
         st.caption(_t("debug_log", path=log_path))
 
     segments = state.get("segments", [])
+    counts = _progress_counts(state)
+    segments_total = counts["segments_total"]
+    translations_done = counts["translations_done"]
+    reviews_done = counts["reviews_done"]
+    translation_percent = _progress_percent(translations_done, segments_total)
+    review_percent = _progress_percent(reviews_done, segments_total)
     review_findings = sum(len(result.findings) for result in state.get("review_results", {}).values())
     unresolved_segments = state.get("unresolved_segments", [])
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     cols[0].metric(_t("segments_metric"), len(segments))
-    cols[1].metric(_t("validation_metric"), len(state.get("deterministic_issues", [])))
-    cols[2].metric(_t("review_metric"), review_findings)
-    cols[3].metric(_t("decisions_metric"), len(unresolved_segments))
-    cols[4].metric(_t("pdf_metric"), _t("yes") if state.get("output_pdf_path") else _t("no"))
+    cols[1].metric(
+        _t("translation_progress_metric"),
+        f"{translation_percent}%",
+        delta=f"{translations_done}/{segments_total or '?'}",
+        delta_color="off",
+    )
+    cols[2].metric(
+        _t("review_metric"),
+        f"{review_percent}%",
+        delta=f"{reviews_done}/{segments_total or '?'}",
+        delta_color="off",
+    )
+    cols[3].metric(_t("validation_metric"), len(state.get("deterministic_issues", [])))
+    cols[4].metric(_t("decisions_metric"), len(unresolved_segments))
+    cols[5].metric(
+        _t("pdf_metric"),
+        _pdf_status_label(state),
+        delta=_t(
+            "pdf_progress_delta",
+            translation_percent=translation_percent,
+            review_percent=review_percent,
+        ),
+        delta_color="off",
+    )
+    st.caption(
+        _t(
+            "progress_to_pdf",
+            translation_percent=translation_percent,
+            review_percent=review_percent,
+        )
+    )
+    if segments_total:
+        st.progress(
+            _progress_ratio(translations_done, segments_total),
+            text=_t(
+                "translation_progress_bar",
+                percent=translation_percent,
+                done=translations_done,
+                total=segments_total,
+            ),
+        )
+        st.progress(
+            _progress_ratio(reviews_done, segments_total),
+            text=_t(
+                "review_progress_bar",
+                percent=review_percent,
+                done=reviews_done,
+                total=segments_total,
+            ),
+        )
+    st.caption(_t("review_findings_caption", review_findings=review_findings))
     _render_token_usage_metrics(state)
     st.caption(
         _t(
@@ -1180,6 +1327,8 @@ def _can_resume(state: dict) -> bool:
         return False
     if state.get("status") == "needs_human_review":
         return False
+    if _ready_for_pdf_generation(state):
+        return False
 
     segments = state.get("segments", [])
     translations = state.get("translations", {})
@@ -1195,7 +1344,13 @@ def _can_resume(state: dict) -> bool:
     return state.get("status") not in {"completed", "completed_with_output_warnings"}
 
 
-def _resume_translation(state: dict) -> None:
+def _resume_translation(
+    state: dict,
+    *,
+    status_label: str | None = None,
+    progress_label: str | None = None,
+    done_label: str | None = None,
+) -> None:
     config = state.get("config")
     if not config:
         st.session_state["last_error"] = _t("empty_checkpoint")
@@ -1214,7 +1369,7 @@ def _resume_translation(state: dict) -> None:
         st.session_state["last_error"] = "\n".join(errors)
         return
 
-    status = st.status(_t("resume_status"), expanded=True)
+    status = st.status(status_label or _t("resume_status"), expanded=True)
     status.caption(
         _t(
             "resume_parallelism_applied",
@@ -1222,7 +1377,7 @@ def _resume_translation(state: dict) -> None:
             review=config.review_concurrency,
         )
     )
-    progress_bar = status.progress(0, text=_t("resume_progress"))
+    progress_bar = status.progress(0, text=progress_label or _t("resume_progress"))
     detail_slot = status.empty()
     history_slot = status.container(height=180, border=True)
     preview_slot = st.empty()
@@ -1257,7 +1412,7 @@ def _resume_translation(state: dict) -> None:
     if resumed_state.get("status") == "needs_human_review":
         _status_update(status, label=_t("needs_human_review"), state="complete")
     else:
-        _status_update(status, label=_t("resume_done"), state="complete")
+        _status_update(status, label=done_label or _t("resume_done"), state="complete")
 
 
 def _render_translation_preview(
@@ -1477,11 +1632,36 @@ def _render_human_review(state: dict) -> None:
         st.caption(_t("showing_segments", shown=min(max_to_show, len(filtered_segments)), total=len(filtered_segments)))
 
 
+def _render_pdf_generation_action(state: dict) -> None:
+    if not _ready_for_pdf_generation(state):
+        return
+
+    with st.container(border=True):
+        st.success(_t("pdf_ready_to_generate"))
+        if st.button(
+            _t("generate_pdf"),
+            type="primary",
+            icon=":material/picture_as_pdf:",
+            key=f"generate_pdf_{state.get('job_id', 'current')}",
+        ):
+            _resume_translation(
+                state,
+                status_label=_t("generating_pdf"),
+                progress_label=_t("rendering_start"),
+                done_label=_t("pdf_generated"),
+            )
+            st.rerun()
+
+
 def _render_outputs(state: dict) -> None:
     if not state.get("output_pdf_path"):
         return
 
     output_path = Path(state["output_pdf_path"])
+    if not output_path.exists():
+        st.error(_t("output_pdf_missing", path=output_path))
+        return
+
     report_path = Path(state["report_path"]) if state.get("report_path") else None
     st.success(_t("output_ready"))
     with st.container(horizontal=True):
@@ -1656,6 +1836,7 @@ if state:
     _render_checkpoint_resume(state)
     _render_translation_preview(state)
     _render_human_review(state)
+    _render_pdf_generation_action(state)
     _render_outputs(state)
 else:
     st.info(_t("empty_info"))
