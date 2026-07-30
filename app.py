@@ -1757,10 +1757,32 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
         last_segment, last_translation = translated_pairs[-1]
         st.markdown(_t("last_saved_segment"))
         left, right = st.columns(2)
-        left.caption(_t("source_segment_caption", segment_id=last_segment.segment_id, page_number=last_segment.page_number))
-        left.code(last_segment.source_text)
-        right.caption(_t("saved_translation_caption"))
-        right.write(last_translation.translated_text)
+        preview_height = _wrapped_text_area_height(
+            last_segment.source_text,
+            last_translation.translated_text,
+            min_height=160,
+            max_height=360,
+        )
+        left.text_area(
+            _t("source_segment_caption", segment_id=last_segment.segment_id, page_number=last_segment.page_number),
+            value=last_segment.source_text,
+            height=preview_height,
+            disabled=True,
+            key=_unique_widget_key("live_source_text", state.get("job_id"), done, last_segment.segment_id),
+        )
+        right.text_area(
+            _t("saved_translation_caption"),
+            value=last_translation.translated_text,
+            height=preview_height,
+            disabled=True,
+            key=_unique_widget_key(
+                "live_translation_text",
+                state.get("job_id"),
+                done,
+                last_segment.segment_id,
+                _text_digest(last_translation.translated_text),
+            ),
+        )
 
         rows = [
             {
@@ -1965,6 +1987,15 @@ def _short_text(text: str, limit: int) -> str:
     return f"{collapsed[:limit]}…"
 
 
+def _wrapped_text_area_height(*texts: object, min_height: int = 180, max_height: int = 520) -> int:
+    visual_lines = 0
+    for text in texts:
+        raw_lines = str(text or "").splitlines() or [""]
+        for line in raw_lines:
+            visual_lines += max(1, (len(line) + 84) // 85)
+    return min(max_height, max(min_height, 76 + visual_lines * 24))
+
+
 def _joined_translation_text(translated_pairs: list[tuple[object, object]]) -> str:
     parts = []
     for segment, translation in translated_pairs:
@@ -2077,10 +2108,26 @@ def _render_human_review(state: dict) -> None:
             expanded=index == 0,
         ):
             left, right = st.columns(2)
-            left.markdown(_t("source"))
-            left.code(segment.source_text)
-            right.markdown(_t("current_translation"))
-            right.write(translation.translated_text)
+            review_preview_height = _wrapped_text_area_height(
+                segment.source_text,
+                translation.translated_text,
+                min_height=220,
+                max_height=560,
+            )
+            left.text_area(
+                _t("source"),
+                value=segment.source_text,
+                height=review_preview_height,
+                disabled=True,
+                key=f"source_review_{segment_id}",
+            )
+            right.text_area(
+                _t("current_translation"),
+                value=translation.translated_text,
+                height=review_preview_height,
+                disabled=True,
+                key=f"current_translation_review_{segment_id}",
+            )
 
             _render_operator_phrase_refinement(
                 segment,
@@ -2093,6 +2140,11 @@ def _render_human_review(state: dict) -> None:
             edited = st.text_area(
                 _t("approved_text"),
                 key=edit_key,
+                height=_wrapped_text_area_height(
+                    st.session_state.get(edit_key, translation.translated_text),
+                    min_height=220,
+                    max_height=560,
+                ),
             )
 
             action = st.segmented_control(
