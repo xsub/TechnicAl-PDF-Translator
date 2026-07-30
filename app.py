@@ -13,6 +13,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from translator.domain.glossary import load_glossary
+from translator.domain.locale_formatting import apply_locale_formatting
 from translator.domain.protected import validate_segment_invariants
 from translator.languages import LANGUAGE_OPTIONS, language_index
 from translator.llm.clients import build_reviewer, build_translator
@@ -1053,6 +1054,7 @@ def _rewrite_translation_with_operator_phrase(
                 "confidence": "medium",
             }
         )
+    revised = apply_locale_formatting(revised, config)
 
     validation_issues = validate_segment_invariants(segment, revised)  # type: ignore[arg-type]
     validation_issues.extend(

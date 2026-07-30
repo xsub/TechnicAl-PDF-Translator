@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 
 from translator.debug import log_debug, log_exception, text_preview
 from translator.domain.glossary import DomainGlossary
+from translator.domain.locale_formatting import apply_locale_formatting
 from translator.schemas import (
     DocumentSegment,
     JobConfig,
@@ -99,6 +100,7 @@ class MockTechnicalTranslator:
             translator_notes=notes,
             confidence=confidence,  # type: ignore[arg-type]
         )
+        result = apply_locale_formatting(result, config)
         log_debug(
             "mock.translate.done",
             segment_id=segment.segment_id,
@@ -117,12 +119,15 @@ class MockTechnicalTranslator:
     ) -> TranslationResult:
         for finding in findings:
             if finding.proposed_translation:
-                return current.model_copy(
-                    update={
-                        "translated_text": finding.proposed_translation,
-                        "translator_notes": [*current.translator_notes, "Applied reviewer proposal."],
-                        "confidence": "medium",
-                    }
+                return apply_locale_formatting(
+                    current.model_copy(
+                        update={
+                            "translated_text": finding.proposed_translation,
+                            "translator_notes": [*current.translator_notes, "Applied reviewer proposal."],
+                            "confidence": "medium",
+                        }
+                    ),
+                    config,
                 )
         return self.translate(segment, glossary, config)
 
@@ -205,7 +210,7 @@ class OpenAITranslator:
         result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult, operation="translate")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
-        return result
+        return apply_locale_formatting(result, config)
 
     def revise(
         self,
@@ -230,7 +235,7 @@ class OpenAITranslator:
         result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult, operation="revise")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
-        return result
+        return apply_locale_formatting(result, config)
 
 
 class OpenAIReviewer:

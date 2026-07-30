@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from translator.debug import log_debug
+from translator.domain.locale_formatting import apply_locale_formatting
 from translator.schemas import (
     DocumentSegment,
     JobConfig,
@@ -154,6 +155,11 @@ def _state_from_payload(payload_json: str) -> TranslationState:
         str(segment_id): TranslationResult.model_validate(result)
         for segment_id, result in raw.get("translations", {}).items()
     }
+    if raw.get("config"):
+        raw["translations"] = {
+            segment_id: apply_locale_formatting(translation, raw["config"])
+            for segment_id, translation in raw["translations"].items()
+        }
     raw["deterministic_issues"] = [
         ValidationIssue.model_validate(issue)
         for issue in raw.get("deterministic_issues", [])

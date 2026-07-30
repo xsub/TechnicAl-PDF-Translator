@@ -6,6 +6,7 @@ import time
 
 from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
+from translator.domain.locale_formatting import apply_locale_formatting
 from translator.llm.clients import (
     build_translator,
     estimate_revision_request_tokens,
@@ -36,7 +37,10 @@ def translate_segments(
     glossary = load_glossary(config.glossary_path)
     translation_cache = TranslationCache.for_config(config)
     client = None
-    translations = dict(state.get("translations", {}))
+    translations = {
+        segment_id: apply_locale_formatting(translation, config)
+        for segment_id, translation in state.get("translations", {}).items()
+    }
     segments = state.get("segments", [])
     total = len(segments)
     memory = _build_translation_memory(segments, translations)
@@ -74,10 +78,13 @@ def translate_segments(
         )
         if memory_key and memory_key in memory:
             source_segment_id, cached_translation = memory[memory_key]
-            translations[segment.segment_id] = copy_translation_from_cache(
-                segment,
-                cached_translation,
-                source_label=f"segment {source_segment_id}",
+            translations[segment.segment_id] = apply_locale_formatting(
+                copy_translation_from_cache(
+                    segment,
+                    cached_translation,
+                    source_label=f"segment {source_segment_id}",
+                ),
+                config,
             )
             translation = translations[segment.segment_id]
             memory_hits += 1
@@ -115,6 +122,7 @@ def translate_segments(
 
         cached_translation = translation_cache.lookup(segment)
         if cached_translation:
+            cached_translation = apply_locale_formatting(cached_translation, config)
             translations[segment.segment_id] = cached_translation
             memory.setdefault(memory_key, (segment.segment_id, cached_translation))
             persistent_cache_hits += 1
@@ -236,7 +244,7 @@ def translate_segments(
                     group = active.pop(future)
                     segment = group.segment
                     try:
-                        translation = future.result()
+                        translation = apply_locale_formatting(future.result(), config)
                     except Exception:
                         if checkpoint_callback:
                             checkpoint_callback(
@@ -261,10 +269,13 @@ def translate_segments(
                     translation_cache.store(segment, translation, job_id=state["job_id"])
 
                     for duplicate in group.duplicates:
-                        translations[duplicate.segment_id] = copy_translation_from_cache(
-                            duplicate,
-                            translation,
-                            source_label=f"segment {segment.segment_id}",
+                        translations[duplicate.segment_id] = apply_locale_formatting(
+                            copy_translation_from_cache(
+                                duplicate,
+                                translation,
+                                source_label=f"segment {segment.segment_id}",
+                            ),
+                            config,
                         )
                         memory_hits += 1
 
@@ -344,7 +355,10 @@ def revise_flagged_segments(
     config = state["config"]
     glossary = load_glossary(config.glossary_path)
     client = build_translator(config)
-    translations = dict(state.get("translations", {}))
+    translations = {
+        segment_id: apply_locale_formatting(translation, config)
+        for segment_id, translation in state.get("translations", {}).items()
+    }
     attempts = dict(state.get("revision_attempts", {}))
     review_results = state.get("review_results", {})
     segment_ids = state.get("revision_required_segments", [])
@@ -392,7 +406,10 @@ def revise_flagged_segments(
             total=total,
             segment_id=segment_id,
         )
-        translations[segment_id] = client.revise(segment, current, findings, glossary, config)
+        translations[segment_id] = apply_locale_formatting(
+            client.revise(segment, current, findings, glossary, config),
+            config,
+        )
         attempts[segment_id] = attempts.get(segment_id, 0) + 1
         partial_state = {
             **state,

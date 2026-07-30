@@ -7,6 +7,7 @@ import time
 
 from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
+from translator.domain.locale_formatting import apply_locale_formatting
 from translator.llm.clients import (
     build_reviewer,
     build_translator,
@@ -53,7 +54,10 @@ def translate_and_review_segments(
     config = state["config"]
     glossary = load_glossary(config.glossary_path)
     translation_cache = TranslationCache.for_config(config)
-    translations = dict(state.get("translations", {}))
+    translations = {
+        segment_id: apply_locale_formatting(translation, config)
+        for segment_id, translation in state.get("translations", {}).items()
+    }
     review_results = dict(state.get("review_results", {}))
     segments = state.get("segments", [])
     total = len(segments)
@@ -104,10 +108,13 @@ def translate_and_review_segments(
 
         if memory_key and memory_key in memory:
             source_segment_id, cached_translation = memory[memory_key]
-            translation = copy_translation_from_cache(
-                segment,
-                cached_translation,
-                source_label=f"segment {source_segment_id}",
+            translation = apply_locale_formatting(
+                copy_translation_from_cache(
+                    segment,
+                    cached_translation,
+                    source_label=f"segment {source_segment_id}",
+                ),
+                config,
             )
             translations[segment.segment_id] = translation
             memory_hits += 1
@@ -145,6 +152,7 @@ def translate_and_review_segments(
 
         cached_translation = translation_cache.lookup(segment)
         if cached_translation:
+            cached_translation = apply_locale_formatting(cached_translation, config)
             translations[segment.segment_id] = cached_translation
             if memory_key:
                 memory.setdefault(memory_key, (segment.segment_id, cached_translation))
@@ -326,7 +334,7 @@ def translate_and_review_segments(
                     group = active_translations.pop(future)
                     segment = group.segment
                     try:
-                        translation = future.result()
+                        translation = apply_locale_formatting(future.result(), config)
                     except Exception:
                         _checkpoint_pipeline(
                             state,
@@ -352,10 +360,13 @@ def translate_and_review_segments(
                     enqueue_review(segment, translation)
 
                     for duplicate in group.duplicates:
-                        duplicate_translation = copy_translation_from_cache(
-                            duplicate,
-                            translation,
-                            source_label=f"segment {segment.segment_id}",
+                        duplicate_translation = apply_locale_formatting(
+                            copy_translation_from_cache(
+                                duplicate,
+                                translation,
+                                source_label=f"segment {segment.segment_id}",
+                            ),
+                            config,
                         )
                         translations[duplicate.segment_id] = duplicate_translation
                         memory_hits += 1
