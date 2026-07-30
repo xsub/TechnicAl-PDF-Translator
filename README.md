@@ -30,6 +30,7 @@ The UI shows the current job checkpoint, debug/status feedback for the active se
 - OpenAI adapter for real translation,
 - Anthropic or OpenAI adapter for independent review,
 - exact-match translation memory within the current job/checkpoint,
+- persistent SQLite translation cache across jobs and app restarts,
 - optional LangGraph workflow structure,
 - Streamlit UI for progress, live translation preview, issues and operator decisions,
 - output PDF generation with ReportLab,
@@ -118,6 +119,15 @@ TechnicAl generates a new PDF that preserves the document structure, but it does
 The current domain glossary is Polish-oriented. When the target language is Polish/Polski/pl, approved Polish terms are validated as required. For other target languages, the glossary acts as a domain concept anchor for the model, but the deterministic validator does not force Polish equivalents.
 
 Translation memory is intentionally conservative. It only reuses exact source-segment matches after whitespace normalization. It does not do fuzzy matching or semantic similarity, because in technical documents a similar sentence can mean something different in a different context.
+
+The persistent translation cache lives in `storage/jobs.db` next to job checkpoints. Before sending a segment to the LLM, TechnicAl checks:
+
+1. already translated segments in the current checkpoint,
+2. identical segments translated earlier in the same job,
+3. identical segments from the persistent SQLite translation cache,
+4. the LLM only if all cache lookups miss.
+
+Cache keys include the normalized source segment, source language, target language, domain, translator provider/model, glossary hash and translator prompt hash. This keeps reuse fast but avoids mixing translations created under different language or terminology settings.
 
 Out of scope for the first MVP:
 

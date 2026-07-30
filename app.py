@@ -91,6 +91,7 @@ UI_TEXT = {
         "pdf_metric": "PDF",
         "yes": "tak",
         "no": "nie",
+        "cache_status": "Cache tłumaczeń: job `{job_hits}`, trwały `{persistent_hits}`, świeże requesty LLM `{llm_calls}`.",
         "mock_result_warning": "Ten wynik powstał w trybie mock. To tryb testowy przepływu, nie prawdziwe tłumaczenie dokumentu. Dla realnego PDF-a wybierz tłumacza OpenAI.",
         "live_preview": "Podgląd na żywo tłumaczenia",
         "translated_saved": "Przetłumaczone i zapisane: {done}/{total}",
@@ -196,6 +197,7 @@ UI_TEXT = {
         "pdf_metric": "PDF",
         "yes": "yes",
         "no": "no",
+        "cache_status": "Translation cache: job `{job_hits}`, persistent `{persistent_hits}`, fresh LLM requests `{llm_calls}`.",
         "mock_result_warning": "This result was created in mock mode. It is a workflow test, not a real document translation. For a real PDF, choose the OpenAI translator.",
         "live_preview": "Live translation preview",
         "translated_saved": "Translated and saved: {done}/{total}",
@@ -274,8 +276,8 @@ def _ui_language() -> str:
     return value if value in UI_TEXT else "pl"
 
 
-def _t(key: str, **kwargs: object) -> str:
-    template = UI_TEXT.get(_ui_language(), UI_TEXT["pl"]).get(key, UI_TEXT["pl"].get(key, key))
+def _t(text_key: str, **kwargs: object) -> str:
+    template = UI_TEXT.get(_ui_language(), UI_TEXT["pl"]).get(text_key, UI_TEXT["pl"].get(text_key, text_key))
     return template.format(**kwargs) if kwargs else template
 
 
@@ -564,6 +566,14 @@ def _render_status(state: dict) -> None:
     cols[2].metric(_t("review_metric"), review_findings)
     cols[3].metric(_t("decisions_metric"), len(unresolved_segments))
     cols[4].metric(_t("pdf_metric"), _t("yes") if state.get("output_pdf_path") else _t("no"))
+    st.caption(
+        _t(
+            "cache_status",
+            job_hits=state.get("translation_memory_hits", 0),
+            persistent_hits=state.get("persistent_translation_cache_hits", 0),
+            llm_calls=state.get("translation_memory_misses", 0),
+        )
+    )
 
     if config and config.translator_provider == "mock":
         st.warning(_t("mock_result_warning"))

@@ -28,7 +28,9 @@ class TranslationState(TypedDict, total=False):
     revision_required_segments: list[str]
     revision_attempts: dict[str, int]
     translation_memory_hits: int
+    persistent_translation_cache_hits: int
     translation_memory_misses: int
+    translation_cache_scope: dict[str, Any]
     operator_decisions: dict[str, OperatorDecision]
     output_pdf_path: str | None
     output_verification: OutputVerification | None

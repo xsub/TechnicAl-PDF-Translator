@@ -20,6 +20,7 @@ from translator.progress import CheckpointCallback, ProgressCallback, emit_progr
 from translator.schemas import JobConfig, OperatorDecision
 from translator.state import TranslationState
 from translator.storage import JobStore
+from translator.translation_cache import TranslationCache, build_translation_cache_scope
 from translator.utils import new_job_id
 
 
@@ -41,6 +42,7 @@ def run_mvp_pipeline(
         max_revision_attempts=config.max_revision_attempts,
     )
     store = _store_for_config(config)
+    _prepare_translation_cache(config, state)
     checkpoint_callback = _checkpoint_callback(store)
 
     emit_progress(progress_callback, stage="extract", message="Ekstrahuję tekst i tabele z PDF-a")
@@ -101,6 +103,7 @@ def resume_mvp_pipeline(
         review_results=len(state.get("review_results", {})),
     )
     store = _store_for_config(config)
+    _prepare_translation_cache(config, state)
     checkpoint_callback = _checkpoint_callback(store)
 
     if not state.get("segments"):
@@ -205,7 +208,9 @@ def _initial_state(config: JobConfig) -> TranslationState:
         "revision_required_segments": [],
         "revision_attempts": {},
         "translation_memory_hits": 0,
+        "persistent_translation_cache_hits": 0,
         "translation_memory_misses": 0,
+        "translation_cache_scope": build_translation_cache_scope(config),
         "operator_decisions": {},
         "output_pdf_path": None,
         "output_verification": None,
@@ -290,6 +295,13 @@ def _render_verify_report(
 def _store_for_config(config: JobConfig) -> JobStore:
     output_parent = Path(config.output_dir).parent
     return JobStore(output_parent / "jobs.db")
+
+
+def _prepare_translation_cache(config: JobConfig, state: TranslationState) -> None:
+    cache = TranslationCache.for_config(config)
+    with DebugTimer("translation_cache.prepare", job_id=state["job_id"], db_path=str(cache.db_path)):
+        cache.backfill_from_jobs()
+        cache.seed_from_state(state)
 
 
 def _checkpoint_callback(store: JobStore) -> CheckpointCallback:

@@ -8,6 +8,7 @@ from translator.llm.clients import build_translator
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
 from translator.schemas import DocumentSegment, ReviewFinding, TranslationResult
 from translator.state import TranslationState
+from translator.translation_cache import TranslationCache, copy_translation_from_cache, normalize_translation_source
 
 
 TranslationMemory = dict[str, tuple[str, TranslationResult]]
@@ -20,13 +21,16 @@ def translate_segments(
 ) -> TranslationState:
     config = state["config"]
     glossary = load_glossary(config.glossary_path)
+    translation_cache = TranslationCache.for_config(config)
     client = None
     translations = dict(state.get("translations", {}))
     segments = state.get("segments", [])
     total = len(segments)
     memory = _build_translation_memory(segments, translations)
     memory_hits = int(state.get("translation_memory_hits", 0))
+    persistent_cache_hits = int(state.get("persistent_translation_cache_hits", 0))
     memory_misses = int(state.get("translation_memory_misses", 0))
+    cache_scope = state.get("translation_cache_scope") or translation_cache.scope
 
     for index, segment in enumerate(segments, start=1):
         if segment.segment_id in translations:
@@ -40,7 +44,7 @@ def translate_segments(
             )
             continue
         started_at = time.perf_counter()
-        memory_key = _translation_memory_key(segment.source_text)
+        memory_key = normalize_translation_source(segment.source_text)
         log_debug(
             "segment.translate.start",
             segment_id=segment.segment_id,
@@ -54,10 +58,10 @@ def translate_segments(
         )
         if memory_key and memory_key in memory:
             source_segment_id, cached_translation = memory[memory_key]
-            translations[segment.segment_id] = _copy_translation_from_memory(
+            translations[segment.segment_id] = copy_translation_from_cache(
                 segment,
                 cached_translation,
-                source_segment_id=source_segment_id,
+                source_label=f"segment {source_segment_id}",
             )
             translation = translations[segment.segment_id]
             memory_hits += 1
@@ -65,7 +69,9 @@ def translate_segments(
                 **state,
                 "translations": translations,
                 "translation_memory_hits": memory_hits,
+                "persistent_translation_cache_hits": persistent_cache_hits,
                 "translation_memory_misses": memory_misses,
+                "translation_cache_scope": cache_scope,
                 "status": f"translating {index}/{total}",
             }
             if checkpoint_callback:
@@ -90,6 +96,41 @@ def translate_segments(
             )
             continue
 
+        cached_translation = translation_cache.lookup(segment)
+        if cached_translation:
+            translations[segment.segment_id] = cached_translation
+            memory.setdefault(memory_key, (segment.segment_id, cached_translation))
+            persistent_cache_hits += 1
+            partial_state = {
+                **state,
+                "translations": translations,
+                "translation_memory_hits": memory_hits,
+                "persistent_translation_cache_hits": persistent_cache_hits,
+                "translation_memory_misses": memory_misses,
+                "translation_cache_scope": cache_scope,
+                "status": f"translating {index}/{total}",
+            }
+            if checkpoint_callback:
+                checkpoint_callback(partial_state)
+            log_debug(
+                "segment.translate.persistent_cache_hit",
+                segment_id=segment.segment_id,
+                index=index,
+                total=total,
+                duration_s=round(time.perf_counter() - started_at, 3),
+                translated_chars=len(cached_translation.translated_text),
+                translated_preview=text_preview(cached_translation.translated_text),
+            )
+            emit_progress(
+                progress_callback,
+                stage="translate",
+                message="Używam trwałego cache tłumaczenia",
+                current=index,
+                total=total,
+                segment_id=segment.segment_id,
+            )
+            continue
+
         emit_progress(
             progress_callback,
             stage="translate",
@@ -105,11 +146,14 @@ def translate_segments(
         memory_misses += 1
         if memory_key:
             memory.setdefault(memory_key, (segment.segment_id, translation))
+        translation_cache.store(segment, translation, job_id=state["job_id"])
         partial_state = {
             **state,
             "translations": translations,
             "translation_memory_hits": memory_hits,
+            "persistent_translation_cache_hits": persistent_cache_hits,
             "translation_memory_misses": memory_misses,
+            "translation_cache_scope": cache_scope,
             "status": f"translating {index}/{total}",
         }
         if checkpoint_callback:
@@ -138,7 +182,9 @@ def translate_segments(
         **state,
         "translations": translations,
         "translation_memory_hits": memory_hits,
+        "persistent_translation_cache_hits": persistent_cache_hits,
         "translation_memory_misses": memory_misses,
+        "translation_cache_scope": cache_scope,
         "status": "segments_translated",
     }
 
@@ -216,31 +262,8 @@ def _build_translation_memory(
         if not translation:
             continue
 
-        key = _translation_memory_key(segment.source_text)
+        key = normalize_translation_source(segment.source_text)
         if key:
             memory.setdefault(key, (segment.segment_id, translation))
 
     return memory
-
-
-def _translation_memory_key(source_text: str) -> str:
-    return " ".join(source_text.split())
-
-
-def _copy_translation_from_memory(
-    segment: DocumentSegment,
-    cached_translation: TranslationResult,
-    *,
-    source_segment_id: str,
-) -> TranslationResult:
-    note = f"Reused exact-match translation from segment {source_segment_id}."
-    notes = list(cached_translation.translator_notes)
-    if note not in notes:
-        notes.append(note)
-
-    return cached_translation.model_copy(
-        update={
-            "segment_id": segment.segment_id,
-            "translator_notes": notes,
-        }
-    )

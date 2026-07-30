@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from translator.nodes.translate import translate_segments
@@ -33,91 +35,156 @@ class CountingTranslator:
 
 class TranslationMemoryTests(unittest.TestCase):
     def test_reuses_existing_exact_match_translation_before_calling_llm(self) -> None:
-        segments = [
-            DocumentSegment(
-                segment_id="s1",
-                page_number=1,
-                order_index=1,
-                block_type="paragraph",
-                source_text="Declaration of compliance",
-            ),
-            DocumentSegment(
-                segment_id="s2",
-                page_number=2,
-                order_index=2,
-                block_type="paragraph",
-                source_text="Declaration   of\ncompliance",
-            ),
-            DocumentSegment(
-                segment_id="s3",
-                page_number=2,
-                order_index=3,
-                block_type="paragraph",
-                source_text="Overall migration was below 10 mg/dm2.",
-            ),
-        ]
-        translator = CountingTranslator()
-        checkpoints: list[dict] = []
-        state = {
-            "job_id": "job-test",
-            "config": JobConfig(source_pdf_path="dummy.pdf"),
-            "segments": segments,
-            "translations": {},
-            "translation_memory_hits": 0,
-            "translation_memory_misses": 0,
-        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = JobConfig(source_pdf_path="dummy.pdf", output_dir=str(Path(temp_dir) / "out"))
+            segments = [
+                DocumentSegment(
+                    segment_id="s1",
+                    page_number=1,
+                    order_index=1,
+                    block_type="paragraph",
+                    source_text="Declaration of compliance",
+                ),
+                DocumentSegment(
+                    segment_id="s2",
+                    page_number=2,
+                    order_index=2,
+                    block_type="paragraph",
+                    source_text="Declaration   of\ncompliance",
+                ),
+                DocumentSegment(
+                    segment_id="s3",
+                    page_number=2,
+                    order_index=3,
+                    block_type="paragraph",
+                    source_text="Overall migration was below 10 mg/dm2.",
+                ),
+            ]
+            translator = CountingTranslator()
+            checkpoints: list[dict] = []
+            state = {
+                "job_id": "job-test",
+                "config": config,
+                "segments": segments,
+                "translations": {},
+                "translation_memory_hits": 0,
+                "persistent_translation_cache_hits": 0,
+                "translation_memory_misses": 0,
+            }
 
-        with patch("translator.nodes.translate.build_translator", return_value=translator):
-            result = translate_segments(state, checkpoint_callback=checkpoints.append)
+            with patch("translator.nodes.translate.build_translator", return_value=translator):
+                result = translate_segments(state, checkpoint_callback=checkpoints.append)
 
-        self.assertEqual(translator.calls, ["s1", "s3"])
-        self.assertEqual(result["translation_memory_hits"], 1)
-        self.assertEqual(result["translation_memory_misses"], 2)
-        self.assertEqual(result["translations"]["s2"].segment_id, "s2")
-        self.assertEqual(result["translations"]["s2"].translated_text, "PL: Declaration of compliance")
-        self.assertIn("Reused exact-match translation from segment s1.", result["translations"]["s2"].translator_notes)
-        self.assertTrue(any(checkpoint.get("translation_memory_hits") == 1 for checkpoint in checkpoints))
+            self.assertEqual(translator.calls, ["s1", "s3"])
+            self.assertEqual(result["translation_memory_hits"], 1)
+            self.assertEqual(result["persistent_translation_cache_hits"], 0)
+            self.assertEqual(result["translation_memory_misses"], 2)
+            self.assertEqual(result["translations"]["s2"].segment_id, "s2")
+            self.assertEqual(result["translations"]["s2"].translated_text, "PL: Declaration of compliance")
+            self.assertIn("Reused exact-match translation from segment s1.", result["translations"]["s2"].translator_notes)
+            self.assertTrue(any(checkpoint.get("translation_memory_hits") == 1 for checkpoint in checkpoints))
 
     def test_reuses_translation_loaded_from_checkpoint(self) -> None:
-        segments = [
-            DocumentSegment(
-                segment_id="s1",
-                page_number=1,
-                order_index=1,
-                block_type="paragraph",
-                source_text="Repeated footer",
-            ),
-            DocumentSegment(
-                segment_id="s2",
-                page_number=2,
-                order_index=2,
-                block_type="paragraph",
-                source_text="Repeated footer",
-            ),
-        ]
-        translator = CountingTranslator()
-        state = {
-            "job_id": "job-test",
-            "config": JobConfig(source_pdf_path="dummy.pdf"),
-            "segments": segments,
-            "translations": {
-                "s1": TranslationResult(
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = JobConfig(source_pdf_path="dummy.pdf", output_dir=str(Path(temp_dir) / "out"))
+            segments = [
+                DocumentSegment(
                     segment_id="s1",
-                    translated_text="Powtarzalna stopka",
-                    confidence="high",
-                )
-            },
-            "translation_memory_hits": 0,
-            "translation_memory_misses": 1,
-        }
+                    page_number=1,
+                    order_index=1,
+                    block_type="paragraph",
+                    source_text="Repeated footer",
+                ),
+                DocumentSegment(
+                    segment_id="s2",
+                    page_number=2,
+                    order_index=2,
+                    block_type="paragraph",
+                    source_text="Repeated footer",
+                ),
+            ]
+            translator = CountingTranslator()
+            state = {
+                "job_id": "job-test",
+                "config": config,
+                "segments": segments,
+                "translations": {
+                    "s1": TranslationResult(
+                        segment_id="s1",
+                        translated_text="Powtarzalna stopka",
+                        confidence="high",
+                    )
+                },
+                "translation_memory_hits": 0,
+                "persistent_translation_cache_hits": 0,
+                "translation_memory_misses": 1,
+            }
 
-        with patch("translator.nodes.translate.build_translator", return_value=translator):
-            result = translate_segments(state)
+            with patch("translator.nodes.translate.build_translator", return_value=translator):
+                result = translate_segments(state)
 
-        self.assertEqual(translator.calls, [])
-        self.assertEqual(result["translation_memory_hits"], 1)
-        self.assertEqual(result["translation_memory_misses"], 1)
-        self.assertEqual(result["translations"]["s2"].translated_text, "Powtarzalna stopka")
+            self.assertEqual(translator.calls, [])
+            self.assertEqual(result["translation_memory_hits"], 1)
+            self.assertEqual(result["persistent_translation_cache_hits"], 0)
+            self.assertEqual(result["translation_memory_misses"], 1)
+            self.assertEqual(result["translations"]["s2"].translated_text, "Powtarzalna stopka")
+
+    def test_reuses_persistent_cache_between_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "out"
+            config = JobConfig(source_pdf_path="dummy.pdf", output_dir=str(output_dir))
+            first_translator = CountingTranslator()
+            first_state = {
+                "job_id": "job-one",
+                "config": config,
+                "segments": [
+                    DocumentSegment(
+                        segment_id="s1",
+                        page_number=1,
+                        order_index=1,
+                        block_type="paragraph",
+                        source_text="Repeated footer",
+                    )
+                ],
+                "translations": {},
+                "translation_memory_hits": 0,
+                "persistent_translation_cache_hits": 0,
+                "translation_memory_misses": 0,
+            }
+
+            with patch("translator.nodes.translate.build_translator", return_value=first_translator):
+                first_result = translate_segments(first_state)
+
+            self.assertEqual(first_translator.calls, ["s1"])
+            self.assertEqual(first_result["translation_memory_misses"], 1)
+
+            second_translator = CountingTranslator()
+            second_state = {
+                "job_id": "job-two",
+                "config": config,
+                "segments": [
+                    DocumentSegment(
+                        segment_id="s9",
+                        page_number=8,
+                        order_index=1,
+                        block_type="paragraph",
+                        source_text="Repeated   footer",
+                    )
+                ],
+                "translations": {},
+                "translation_memory_hits": 0,
+                "persistent_translation_cache_hits": 0,
+                "translation_memory_misses": 0,
+            }
+
+            with patch("translator.nodes.translate.build_translator", return_value=second_translator):
+                second_result = translate_segments(second_state)
+
+            self.assertEqual(second_translator.calls, [])
+            self.assertEqual(second_result["translation_memory_hits"], 0)
+            self.assertEqual(second_result["persistent_translation_cache_hits"], 1)
+            self.assertEqual(second_result["translation_memory_misses"], 0)
+            self.assertEqual(second_result["translations"]["s9"].translated_text, "PL: Repeated footer")
 
 
 if __name__ == "__main__":
