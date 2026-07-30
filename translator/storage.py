@@ -188,6 +188,15 @@ def _normalize_recoverable_status(raw: dict) -> None:
 
     if status.startswith("reviewing") and translations_count and review_results_count >= translations_count:
         raw["status"] = "translation_reviewed"
+        return
+
+    if (
+        status.startswith("pipeline")
+        and segments_count
+        and translations_count >= segments_count
+        and review_results_count >= translations_count
+    ):
+        raw["status"] = "translation_reviewed"
 
 
 def build_report(state: TranslationState, report_path: str | Path | None = None) -> JobReport:

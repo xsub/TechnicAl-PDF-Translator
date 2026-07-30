@@ -94,6 +94,7 @@ UI_TEXT = {
         "review_provider": "review",
         "parallelism_status": "parallel",
         "source_to_target": "języki",
+        "pipeline_progress_caption": "Postęp pipeline: tłumaczenia `{translations}/{segments}`, review `{reviews}/{segments}`.",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segmenty",
         "validation_metric": "Walidacja",
@@ -111,6 +112,7 @@ UI_TEXT = {
         "no_token_usage_yet": "Tokeny pojawią się po zakończeniu pierwszego realnego requestu LLM. Cache i mock nie doliczają tokenów.",
         "llm_inflight": "Request LLM w toku: `{operation}` dla segmentu `{segment_id}` (`{provider}` `{model}`). Tokeny zaktualizują się po odpowiedzi providera.",
         "llm_inflight_many": "Requesty LLM w toku: `{active}` (`{operation}`, `{provider}` `{model}`), segmenty: {segments}. Tokeny zaktualizują się po odpowiedziach providera.",
+        "llm_pipeline_inflight": "Pipeline LLM w toku: `{active}` requestów równolegle, segmenty: {segments}. Tokeny zaktualizują się po odpowiedziach providerów.",
         "llm_request_inflight_delta": "+1 w toku",
         "llm_requests_inflight_delta": "+{active} w toku",
         "estimated_input_delta": "+~{tokens} input w toku",
@@ -237,6 +239,7 @@ UI_TEXT = {
         "review_provider": "review",
         "parallelism_status": "parallel",
         "source_to_target": "languages",
+        "pipeline_progress_caption": "Pipeline progress: translations `{translations}/{segments}`, review `{reviews}/{segments}`.",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segments",
         "validation_metric": "Validation",
@@ -254,6 +257,7 @@ UI_TEXT = {
         "no_token_usage_yet": "Tokens will appear after the first real LLM request finishes. Cache and mock do not add tokens.",
         "llm_inflight": "LLM request in progress: `{operation}` for segment `{segment_id}` (`{provider}` `{model}`). Token usage will update after the provider responds.",
         "llm_inflight_many": "LLM requests in progress: `{active}` (`{operation}`, `{provider}` `{model}`), segments: {segments}. Token usage will update after provider responses.",
+        "llm_pipeline_inflight": "LLM pipeline in progress: `{active}` parallel requests, segments: {segments}. Token usage will update after provider responses.",
         "llm_request_inflight_delta": "+1 in flight",
         "llm_requests_inflight_delta": "+{active} in flight",
         "estimated_input_delta": "+~{tokens} input in flight",
@@ -403,6 +407,12 @@ def _progress_message(raw_message: str) -> str:
         "Pomijam już przetłumaczony segment": "Skipping already translated segment",
         "Używam zapisanego tłumaczenia identycznego segmentu": "Reusing an identical segment translation",
         "Używam trwałego cache tłumaczenia": "Using persistent translation cache",
+        "Pipeline: pomijam już przetłumaczony segment": "Pipeline: skipping already translated segment",
+        "Pipeline: używam zapisanego tłumaczenia identycznego segmentu": "Pipeline: reusing identical segment translation",
+        "Pipeline: używam trwałego cache tłumaczenia": "Pipeline: using persistent translation cache",
+        "Pipeline: tłumaczenie i review równolegle": "Pipeline: translating and reviewing in parallel",
+        "Pipeline: segment przetłumaczony": "Pipeline: segment translated",
+        "Pipeline: segment po review": "Pipeline: segment reviewed",
         "Tłumaczę segment": "Translating segment",
         "Tłumaczę segmenty równolegle": "Translating segments in parallel",
         "Segment przetłumaczony": "Segment translated",
@@ -428,7 +438,12 @@ def _progress_message(raw_message: str) -> str:
         (r"^Wymagana decyzja operatora: (\d+) segmentów$", r"Operator decision required: \1 segments"),
         (r"^Waliduję tłumaczenia - cykl (\d+)/(\d+)$", r"Validating translations - cycle \1/\2"),
         (r"^Uruchamiam review - cykl (\d+)/(\d+)$", r"Running review - cycle \1/\2"),
+        (r"^Review już gotowy z pipeline - cykl (\d+)/(\d+)$", r"Review already completed by pipeline - cycle \1/\2"),
         (r"^Wznawiam tłumaczenie od checkpointu \((\d+)/(\d+)\)$", r"Resuming translation from checkpoint (\1/\2)"),
+        (
+            r"^Wznawiam pipeline tłumaczenie→review \((\d+)/(\d+) tłumaczeń, (\d+)/(\d+) review\)$",
+            r"Resuming translation→review pipeline (\1/\2 translations, \3/\4 reviews)",
+        ),
     ]
     for pattern, replacement in patterns:
         translated = re.sub(pattern, replacement, raw_message)
@@ -634,7 +649,15 @@ def _render_token_usage_metrics(state: dict) -> None:
         delta_color="off",
     )
     if inflight:
-        if active_requests > 1:
+        if inflight.get("operation") == "pipeline":
+            st.caption(
+                _t(
+                    "llm_pipeline_inflight",
+                    active=active_requests,
+                    segments=_inflight_segments_label(inflight),
+                )
+            )
+        elif active_requests > 1:
             st.caption(
                 _t(
                     "llm_inflight_many",
@@ -705,13 +728,13 @@ def _render_parallel_tasks(state: dict, inflight: dict) -> None:
         getattr(segment, "segment_id", ""): segment
         for segment in state.get("segments", [])
     }
-    operation = str(inflight.get("operation", "llm"))
-    provider = str(inflight.get("provider", "-"))
-    model = str(inflight.get("model", "-"))
     rows = []
     for index, request in enumerate(requests, start=1):
         segment_id = str(request.get("segment_id") or inflight.get("segment_id") or "-")
         segment = segments_by_id.get(segment_id)
+        operation = str(request.get("operation") or inflight.get("operation", "llm"))
+        provider = str(request.get("provider") or inflight.get("provider", "-"))
+        model = str(request.get("model") or inflight.get("model", "-"))
         rows.append(
             {
                 _t("parallel_task_col_slot"): index,
@@ -808,7 +831,7 @@ def _make_progress_callback(
             history_slot.caption(f"{message}: {current}/{total}")
             last_log_key["value"] = log_key
 
-        if live_preview_slot is not None and stage in {"extract", "prepare", "translate", "review", "revise"}:
+        if live_preview_slot is not None and stage in {"extract", "prepare", "translate", "review", "revise", "pipeline"}:
             preview_state = _load_latest_checkpoint(silent=True)
             if not preview_state or not _checkpoint_matches(preview_state, checkpoint_job_id, checkpoint_source_path):
                 return
@@ -949,6 +972,14 @@ def _render_status(state: dict) -> None:
 
     st.subheader(_t("status"))
     st.write(f"`{state.get('status', 'unknown')}`{provider_note}")
+    st.caption(
+        _t(
+            "pipeline_progress_caption",
+            translations=len(state.get("translations", {})),
+            reviews=len(state.get("review_results", {})),
+            segments=len(state.get("segments", [])),
+        )
+    )
     if config and config.debug:
         log_path = Path(config.output_dir).parent / "logs" / f"{state.get('job_id')}.debug.log"
         st.caption(_t("debug_log", path=log_path))

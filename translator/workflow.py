@@ -12,7 +12,7 @@ from translator.nodes import (
     resolve_findings,
     review_translation,
     revise_flagged_segments,
-    translate_segments,
+    translate_and_review_segments,
     validate_invariants,
     verify_output,
 )
@@ -59,11 +59,17 @@ def run_mvp_pipeline(
         state = prepare_segments(state, progress_callback)
     store.save_state(state)
 
-    with DebugTimer("node.translate_segments", job_id=state["job_id"], segments=len(state.get("segments", []))):
-        state = translate_segments(state, progress_callback, checkpoint_callback)
+    with DebugTimer("node.translate_and_review_segments", job_id=state["job_id"], segments=len(state.get("segments", []))):
+        state = translate_and_review_segments(state, progress_callback, checkpoint_callback)
     store.save_state(state)
 
-    state = _validate_review_resolve_loop(state, store, progress_callback, checkpoint_callback)
+    state = _validate_review_resolve_loop(
+        state,
+        store,
+        progress_callback,
+        checkpoint_callback,
+        skip_initial_review_if_complete=True,
+    )
 
     if state.get("unresolved_segments") and config.require_human_review:
         state = {**state, "status": "needs_human_review"}
@@ -118,17 +124,18 @@ def resume_mvp_pipeline(
             state = prepare_segments(state, progress_callback)
         store.save_state(state)
 
-    if len(state.get("translations", {})) < len(state.get("segments", [])):
+    if _needs_translate_review_pipeline(state):
         emit_progress(
             progress_callback,
-            stage="translate",
+            stage="pipeline",
             message=(
-                "Wznawiam tłumaczenie od checkpointu "
-                f"({len(state.get('translations', {}))}/{len(state.get('segments', []))})"
+                "Wznawiam pipeline tłumaczenie→review "
+                f"({len(state.get('translations', {}))}/{len(state.get('segments', []))} tłumaczeń, "
+                f"{len(state.get('review_results', {}))}/{len(state.get('segments', []))} review)"
             ),
         )
-        with DebugTimer("node.translate_segments.resume", job_id=state["job_id"], segments=len(state.get("segments", []))):
-            state = translate_segments(state, progress_callback, checkpoint_callback)
+        with DebugTimer("node.translate_and_review_segments.resume", job_id=state["job_id"], segments=len(state.get("segments", []))):
+            state = translate_and_review_segments(state, progress_callback, checkpoint_callback)
         store.save_state(state)
 
     state = _validate_review_resolve_loop(
@@ -137,6 +144,7 @@ def resume_mvp_pipeline(
         progress_callback,
         checkpoint_callback,
         resume_existing_reviews=True,
+        skip_initial_review_if_complete=True,
     )
 
     if state.get("unresolved_segments") and config.require_human_review:
@@ -227,6 +235,7 @@ def _validate_review_resolve_loop(
     checkpoint_callback: CheckpointCallback | None = None,
     *,
     resume_existing_reviews: bool = False,
+    skip_initial_review_if_complete: bool = False,
 ) -> TranslationState:
     max_cycles = state["config"].max_revision_attempts + 1
     for cycle in range(1, max_cycles + 1):
@@ -236,15 +245,22 @@ def _validate_review_resolve_loop(
             state = validate_invariants(state, progress_callback)
         store.save_state(state)
 
-        emit_progress(progress_callback, stage="review", message=f"Uruchamiam review - cykl {cycle}/{max_cycles}")
-        with DebugTimer("node.review_translation", job_id=state["job_id"], cycle=cycle):
-            state = review_translation(
-                state,
+        if skip_initial_review_if_complete and cycle == 1 and _reviews_complete(state):
+            emit_progress(
                 progress_callback,
-                checkpoint_callback,
-                skip_existing=resume_existing_reviews and cycle == 1,
+                stage="review",
+                message=f"Review już gotowy z pipeline - cykl {cycle}/{max_cycles}",
             )
-        store.save_state(state)
+        else:
+            emit_progress(progress_callback, stage="review", message=f"Uruchamiam review - cykl {cycle}/{max_cycles}")
+            with DebugTimer("node.review_translation", job_id=state["job_id"], cycle=cycle):
+                state = review_translation(
+                    state,
+                    progress_callback,
+                    checkpoint_callback,
+                    skip_existing=resume_existing_reviews and cycle == 1,
+                )
+            store.save_state(state)
 
         emit_progress(progress_callback, stage="resolve", message="Rozstrzygam problemy i routing")
         with DebugTimer("node.resolve_findings", job_id=state["job_id"], cycle=cycle):
@@ -291,6 +307,23 @@ def _render_verify_report(
     store.save_state(state)
     emit_progress(progress_callback, stage="done", message="Workflow zakończony")
     return state
+
+
+def _needs_translate_review_pipeline(state: TranslationState) -> bool:
+    segments_count = len(state.get("segments", []))
+    if not segments_count:
+        return False
+
+    translations_count = len(state.get("translations", {}))
+    review_results_count = len(state.get("review_results", {}))
+    return translations_count < segments_count or review_results_count < translations_count
+
+
+def _reviews_complete(state: TranslationState) -> bool:
+    translations_count = len(state.get("translations", {}))
+    if translations_count == 0:
+        return False
+    return len(state.get("review_results", {})) >= translations_count
 
 
 def _store_for_config(config: JobConfig) -> JobStore:
