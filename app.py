@@ -1915,7 +1915,7 @@ def _render_status(state: dict) -> None:
             f"{_t('review_provider')}: `{config.reviewer_provider}`"
             f" | {_t('parallelism_status')}: `{translation_concurrency}/{review_concurrency}`"
             f" | {_t('phrase_memory_status')}: "
-            f"`{_t('phrase_memory_auto') if config.use_user_phrase_memory else _t('phrase_memory_suggestions')}`"
+            f"`{_t('phrase_memory_auto') if _config_bool(config, 'use_user_phrase_memory', False) else _t('phrase_memory_suggestions')}`"
         )
 
     st.subheader(_t("status"))
