@@ -17,6 +17,7 @@ from translator.domain.locale_formatting import apply_locale_formatting
 from translator.domain.protected import validate_segment_invariants
 from translator.languages import LANGUAGE_OPTIONS, language_index
 from translator.llm.clients import build_reviewer, build_translator
+from translator.operator_refinement import suggest_operator_preferred_phrase, suggest_operator_replacement_text
 from translator.schemas import JobConfig, ReviewFinding, TranslationResult
 from translator.storage import JobStore
 from translator.utils import new_job_id
@@ -209,7 +210,7 @@ UI_TEXT = {
         "current_translation": "Aktualne tłumaczenie",
         "approved_text": "Zatwierdzony tekst",
         "operator_refinement_title": "Poprawka operatora z przerobieniem zdania",
-        "operator_refinement_caption": "Wpisz preferowaną frazę/termin. TechnicAl przerobi cały segment tak, żeby fraza pasowała składniowo i semantycznie do zdania.",
+        "operator_refinement_caption": "Lewy input to aktualny fragment, który ma zostać zastąpiony. Prawy input to lepsza fraza/propozycja, której TechnicAl ma użyć, odmieniając ją w razie potrzeby.",
         "operator_replace_from": "Fragment do zastąpienia",
         "operator_replace_placeholder": "np. wysuszonej warstwie farby",
         "operator_preferred_phrase": "Lepsza fraza / termin bazowy",
@@ -415,7 +416,7 @@ UI_TEXT = {
         "current_translation": "Current translation",
         "approved_text": "Approved text",
         "operator_refinement_title": "Operator phrase refinement",
-        "operator_refinement_caption": "Enter the preferred phrase/term. TechnicAl rewrites the whole segment so the phrase fits the sentence syntactically and semantically.",
+        "operator_refinement_caption": "Left: current text to replace. Right: better phrase/proposal to use; TechnicAl may inflect it when needed.",
         "operator_replace_from": "Text to replace",
         "operator_replace_placeholder": "e.g. dried ink layer",
         "operator_preferred_phrase": "Better phrase / base term",
@@ -840,6 +841,10 @@ def _operator_refinement_error_key(segment_id: str) -> str:
     return f"operator_refinement_error_{segment_id}"
 
 
+def _operator_refinement_defaults_key(segment_id: str) -> str:
+    return f"operator_refinement_defaults_{segment_id}"
+
+
 def _operator_refinement_worker_count() -> int:
     try:
         requested = int(os.getenv("OPERATOR_REFINEMENT_WORKERS", "3"))
@@ -863,6 +868,37 @@ def _suggest_replacement_text(issues: list[object]) -> str:
         if evidence and len(evidence) <= 120:
             return evidence
     return ""
+
+
+def _apply_operator_refinement_defaults(
+    segment_id: str,
+    translation: TranslationResult,
+    issues: list[object],
+    *,
+    replace_key: str,
+    phrase_key: str,
+) -> None:
+    defaults_key = _operator_refinement_defaults_key(segment_id)
+    previous_defaults = st.session_state.get(defaults_key)
+    new_defaults = {
+        "replace": suggest_operator_replacement_text(translation.translated_text),
+        "preferred": suggest_operator_preferred_phrase(issues, translation.translated_text),
+    }
+
+    if isinstance(previous_defaults, dict):
+        if st.session_state.get(replace_key, "") == previous_defaults.get("replace", ""):
+            st.session_state[replace_key] = new_defaults["replace"]
+        if st.session_state.get(phrase_key, "") == previous_defaults.get("preferred", ""):
+            st.session_state[phrase_key] = new_defaults["preferred"]
+        st.session_state[defaults_key] = new_defaults
+        return
+
+    legacy_replace_default = _suggest_replacement_text(issues)
+    if replace_key not in st.session_state or st.session_state.get(replace_key, "") == legacy_replace_default:
+        st.session_state[replace_key] = new_defaults["replace"]
+    if phrase_key not in st.session_state or not str(st.session_state.get(phrase_key, "") or "").strip():
+        st.session_state[phrase_key] = new_defaults["preferred"]
+    st.session_state[defaults_key] = new_defaults
 
 
 def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, fallback_text: str) -> None:
@@ -917,8 +953,13 @@ def _render_operator_phrase_refinement(
     result_key = _operator_refinement_result_key(segment_id)
     error_key = _operator_refinement_error_key(segment_id)
 
-    st.session_state.setdefault(replace_key, _suggest_replacement_text(issues))
-    st.session_state.setdefault(phrase_key, "")
+    _apply_operator_refinement_defaults(
+        segment_id,
+        translation,
+        issues,
+        replace_key=replace_key,
+        phrase_key=phrase_key,
+    )
     _poll_operator_refinement_task(segment_id, edit_key=edit_key, fallback_text=translation.translated_text)
 
     with st.container(border=True):
