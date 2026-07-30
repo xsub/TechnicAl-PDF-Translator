@@ -1,0 +1,51 @@
+terms:
+  overall_migration:
+    source: overall migration
+    preferred_pl: migracja globalna
+    alternatives:
+      - migracja całkowita
+    forbidden:
+      - ogólna migracja
+    retain_english: false
+
+  specific_migration:
+    source: specific migration
+    preferred_pl: migracja specyficzna
+    retain_english: false
+
+  food_contact_material:
+    source: food contact material
+    preferred_pl: materiał przeznaczony do kontaktu z żywnością
+    short_pl: materiał do kontaktu z żywnością
+    retain_english: false
+
+  declaration_of_compliance:
+    source: declaration of compliance
+    preferred_pl: deklaracja zgodności
+    retain_english: false
+
+  grain_direction:
+    source: grain direction
+    preferred_pl: kierunek włókna
+    retain_english_on_first_use: true
+
+  set_off:
+    source: set-off
+    preferred_pl: odbijanie farby
+    retain_english_on_first_use: true
+
+  not_detected:
+    source: not detected
+    preferred_pl: nie wykryto
+    preserve_abbreviation: ND
+
+  limit_of_quantification:
+    source: limit of quantification
+    preferred_pl: granica oznaczalności
+    preserve_abbreviation: LOQ
+
+  limit_of_detection:
+    source: limit of detection
+    preferred_pl: granica wykrywalności
+    preserve_abbreviation: LOD
+

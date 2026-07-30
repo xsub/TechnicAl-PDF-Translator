@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tech-translator-agent"
+version = "0.1.0"
+description = "MVP workflow for audited technical PDF translation with deterministic checks and human review."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.8",
+  "pdfplumber>=0.11",
+  "pypdf>=5.0",
+  "reportlab>=4.2",
+  "streamlit>=1.37",
+  "langgraph>=0.2",
+  "langchain-openai>=0.2",
+  "langchain-anthropic>=0.2",
+  "python-dotenv>=1.0",
+  "PyYAML>=6.0",
+  "watchdog>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+technical-pdf-translator = "translator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["translator*"]
+exclude = ["storage*", "tests*"]
+
+[tool.setuptools.package-data]
+translator = ["domain/*.yaml", "domain/prompts/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

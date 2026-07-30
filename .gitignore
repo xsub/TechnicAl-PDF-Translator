@@ -1,0 +1,46 @@
+# Python environments
+.venv/
+venv/
+env/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local runtime data and generated documents
+storage/
+tmp/
+output/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.pdf
+*.jsonl
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Local assistant/editor metadata
+.agents/
+.claude/
+.codex/
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/

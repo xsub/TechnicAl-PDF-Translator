@@ -67,6 +67,12 @@ Potem otwórz:
 http://localhost:8501
 ```
 
+Jeżeli budujesz przez Podmana i chcesz, żeby `HEALTHCHECK` został zapisany w obrazie, użyj formatu Docker:
+
+```bash
+podman build --format docker -t tech-translator-agent .
+```
+
 Minimalny `.env` dla realnego tłumaczenia:
 
 ```bash
