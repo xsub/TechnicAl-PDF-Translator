@@ -211,6 +211,7 @@ def _initial_state(config: JobConfig) -> TranslationState:
         "persistent_translation_cache_hits": 0,
         "translation_memory_misses": 0,
         "translation_cache_scope": build_translation_cache_scope(config),
+        "llm_inflight": None,
         "operator_decisions": {},
         "output_pdf_path": None,
         "output_verification": None,

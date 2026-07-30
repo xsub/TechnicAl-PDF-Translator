@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -98,6 +99,11 @@ UI_TEXT = {
         "output_tokens_metric": "Output tokens",
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokeny pojawią się po zakończeniu pierwszego realnego requestu LLM. Cache i mock nie doliczają tokenów.",
+        "llm_inflight": "Request LLM w toku: `{operation}` dla segmentu `{segment_id}`. Tokeny zaktualizują się po odpowiedzi providera.",
+        "progress_stage": "Etap",
+        "progress_segment": "segment",
+        "progress_stage_progress": "postęp etapu",
+        "progress_working": "Pracuję...",
         "mock_result_warning": "Ten wynik powstał w trybie mock. To tryb testowy przepływu, nie prawdziwe tłumaczenie dokumentu. Dla realnego PDF-a wybierz tłumacza OpenAI.",
         "live_preview": "Podgląd na żywo tłumaczenia",
         "translated_saved": "Przetłumaczone i zapisane: {done}/{total}",
@@ -148,6 +154,9 @@ UI_TEXT = {
         "download_pdf": "Pobierz PDF",
         "download_report": "Pobierz raport JSON",
         "loaded_checkpoint": "Wczytałem ostatni zapisany checkpoint: `{job_id}` ze statusem `{status}`.",
+        "checkpoint_load_error": "Nie udało się wczytać checkpointu: {error}",
+        "resume_missing_source": "Nie mogę wznowić: brakuje pliku źródłowego `{path}`.",
+        "review_expander_label": "{segment_id} - strona {page_number}",
         "segment_col": "segment",
         "page_col": "strona",
         "type_col": "typ",
@@ -210,6 +219,11 @@ UI_TEXT = {
         "output_tokens_metric": "Output tokens",
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokens will appear after the first real LLM request finishes. Cache and mock do not add tokens.",
+        "llm_inflight": "LLM request in progress: `{operation}` for segment `{segment_id}`. Token usage will update after the provider responds.",
+        "progress_stage": "Stage",
+        "progress_segment": "segment",
+        "progress_stage_progress": "stage progress",
+        "progress_working": "Working...",
         "mock_result_warning": "This result was created in mock mode. It is a workflow test, not a real document translation. For a real PDF, choose the OpenAI translator.",
         "live_preview": "Live translation preview",
         "translated_saved": "Translated and saved: {done}/{total}",
@@ -260,6 +274,9 @@ UI_TEXT = {
         "download_pdf": "Download PDF",
         "download_report": "Download JSON report",
         "loaded_checkpoint": "Loaded the latest checkpoint: `{job_id}` with status `{status}`.",
+        "checkpoint_load_error": "Could not load checkpoint: {error}",
+        "resume_missing_source": "Cannot resume: source file is missing: `{path}`.",
+        "review_expander_label": "{segment_id} - page {page_number}",
         "segment_col": "segment",
         "page_col": "page",
         "type_col": "type",
@@ -293,6 +310,94 @@ def _t(text_key: str, **kwargs: object) -> str:
     return template.format(**kwargs) if kwargs else template
 
 
+def _progress_message(raw_message: str) -> str:
+    if _ui_language() != "en":
+        return raw_message
+
+    exact = {
+        "Pracuję...": "Working...",
+        "Ekstrahuję tekst i tabele z PDF-a": "Extracting text and tables from the PDF",
+        "Przygotowuję segmenty i chronione wartości": "Preparing segments and protected values",
+        "Pomijam już przetłumaczony segment": "Skipping already translated segment",
+        "Używam zapisanego tłumaczenia identycznego segmentu": "Reusing an identical segment translation",
+        "Używam trwałego cache tłumaczenia": "Using persistent translation cache",
+        "Tłumaczę segment": "Translating segment",
+        "Segment przetłumaczony": "Segment translated",
+        "Sprawdzam liczby, jednostki i odnośniki": "Checking numbers, units and references",
+        "Pomijam segment już zrecenzowany w checkpoincie": "Skipping segment already reviewed in checkpoint",
+        "Recenzuję segment": "Reviewing segment",
+        "Segment po review": "Segment reviewed",
+        "Rozstrzygam problemy i routing": "Resolving issues and routing",
+        "Poprawiam zakwestionowany segment": "Revising flagged segment",
+        "Generuję PDF wynikowy": "Generating output PDF",
+        "Weryfikuję PDF wynikowy": "Verifying output PDF",
+        "Zapisuję raport audytowy": "Writing audit report",
+        "Workflow zakończony": "Workflow complete",
+        "Wznawiam: ekstrahuję PDF": "Resuming: extracting PDF",
+        "Wznawiam: przygotowuję segmenty": "Resuming: preparing segments",
+    }
+    if raw_message in exact:
+        return exact[raw_message]
+
+    patterns = [
+        (r"^Ekstrakcja zakończona: (\d+) segmentów$", r"Extraction complete: \1 segments"),
+        (r"^Wymagana decyzja operatora: (\d+) segmentów$", r"Operator decision required: \1 segments"),
+        (r"^Waliduję tłumaczenia - cykl (\d+)/(\d+)$", r"Validating translations - cycle \1/\2"),
+        (r"^Uruchamiam review - cykl (\d+)/(\d+)$", r"Running review - cycle \1/\2"),
+        (r"^Wznawiam tłumaczenie od checkpointu \((\d+)/(\d+)\)$", r"Resuming translation from checkpoint (\1/\2)"),
+    ]
+    for pattern, replacement in patterns:
+        translated = re.sub(pattern, replacement, raw_message)
+        if translated != raw_message:
+            return translated
+
+    return raw_message
+
+
+def _localized_issue_message(raw_message: str) -> str:
+    if _ui_language() != "en":
+        return raw_message
+
+    exact = {
+        "Tłumaczenie wygląda jak nieprzetłumaczony fragment źródłowy.": (
+            "The translation appears to be an untranslated source fragment."
+        ),
+        "Fragment angielski został pozostawiony bez tłumaczenia.": (
+            "The English fragment was left untranslated."
+        ),
+        "Źródło zawiera negację, której nie widać w tłumaczeniu.": (
+            "The source contains a negation that is not visible in the translation."
+        ),
+    }
+    if raw_message in exact:
+        return exact[raw_message]
+
+    patterns = [
+        (
+            r"^Chroniony element '(.*?)' \((.*?)\) nie występuje w tłumaczeniu\.$",
+            r"Protected element '\1' (\2) is missing from the translation.",
+        ),
+        (
+            r"^Tłumaczenie dodało chroniony element '(.*?)' \((.*?)\), którego nie było w źródle\.$",
+            r"The translation added protected element '\1' (\2), which was not present in the source.",
+        ),
+        (
+            r"^Termin '(.*?)' nie używa zatwierdzonego odpowiednika '(.*?)'\.$",
+            r"Term '\1' does not use the approved equivalent '\2'.",
+        ),
+        (
+            r"^Termin '(.*?)' jest zabroniony dla '(.*?)'\.$",
+            r"Term '\1' is forbidden for '\2'.",
+        ),
+    ]
+    for pattern, replacement in patterns:
+        translated = re.sub(pattern, replacement, raw_message)
+        if translated != raw_message:
+            return translated
+
+    return raw_message
+
+
 def _language_options_with_current(current: str | None) -> list[str]:
     options = list(LANGUAGE_OPTIONS)
     if current and current not in options:
@@ -317,7 +422,7 @@ def _load_latest_checkpoint(*, silent: bool = False) -> dict | None:
         return JobStore().load_latest_state()
     except Exception as exc:  # noqa: BLE001 - checkpoint load must not break app boot
         if not silent:
-            st.session_state["last_error"] = f"Nie udało się wczytać checkpointu: {exc}"
+            st.session_state["last_error"] = _t("checkpoint_load_error", error=exc)
         return None
 
 
@@ -363,7 +468,7 @@ def _validate_provider_configuration(translator_provider: str, reviewer_provider
 def _issue_label(issue: object) -> str:
     severity = getattr(issue, "severity", "info")
     issue_type = getattr(issue, "issue_type", getattr(issue, "category", "issue"))
-    message = getattr(issue, "message", getattr(issue, "explanation", ""))
+    message = _localized_issue_message(str(getattr(issue, "message", getattr(issue, "explanation", ""))))
     return f"{severity.upper()} - {issue_type}: {message}"
 
 
@@ -407,6 +512,15 @@ def _render_token_usage_metrics(state: dict) -> None:
     cols[1].metric(_t("input_tokens_metric"), f"{usage['input_tokens']:,}")
     cols[2].metric(_t("output_tokens_metric"), f"{usage['output_tokens']:,}")
     cols[3].metric(_t("total_tokens_metric"), f"{usage['total_tokens']:,}")
+    inflight = state.get("llm_inflight")
+    if isinstance(inflight, dict):
+        st.caption(
+            _t(
+                "llm_inflight",
+                operation=inflight.get("operation", "llm"),
+                segment_id=inflight.get("segment_id", "-"),
+            )
+        )
     if usage["requests"] == 0:
         st.caption(_t("no_token_usage_yet"))
 
@@ -434,7 +548,7 @@ def _make_progress_callback(
 
     def on_progress(event: dict) -> None:
         stage = str(event.get("stage") or "workflow")
-        message = str(event.get("message") or "Pracuję...")
+        message = _progress_message(str(event.get("message") or _t("progress_working")))
         current = event.get("current")
         total = event.get("total")
         segment_id = event.get("segment_id")
@@ -446,13 +560,14 @@ def _make_progress_callback(
                 progress_text = f"{progress_text} - {segment_id}"
             progress_bar.progress(ratio, text=progress_text)
             detail_slot.caption(
-                f"Etap: `{stage}` | segment: `{segment_id or '-'}` | postęp etapu: {current}/{total}"
+                f"{_t('progress_stage')}: `{stage}` | {_t('progress_segment')}: `{segment_id or '-'}` | "
+                f"{_t('progress_stage_progress')}: {current}/{total}"
             )
             log_key = (stage, current // 10)
         else:
             ratio = 1.0 if stage in {"done", "human_review"} else 0.0
             progress_bar.progress(ratio, text=message)
-            detail_slot.caption(f"Etap: `{stage}`")
+            detail_slot.caption(f"{_t('progress_stage')}: `{stage}`")
             log_key = (stage, message)
 
         _status_update(status, label=message)
@@ -480,6 +595,7 @@ def _make_progress_callback(
                 len(preview_state.get("review_results", {})),
                 usage["total_tokens"],
                 usage["requests"],
+                preview_state.get("llm_inflight"),
             )
             if preview_key != last_preview_key["value"]:
                 last_preview_key["value"] = preview_key
@@ -732,7 +848,7 @@ def _resume_translation(state: dict) -> None:
 
     source_path = Path(state.get("source_pdf_path", ""))
     if not source_path.exists():
-        st.session_state["last_error"] = f"Nie mogę wznowić: brakuje pliku źródłowego `{source_path}`."
+        st.session_state["last_error"] = _t("resume_missing_source", path=source_path)
         return
 
     errors = _validate_provider_configuration(config.translator_provider, config.reviewer_provider)
@@ -937,7 +1053,10 @@ def _render_human_review(state: dict) -> None:
         translation = translations[segment_id]
         issues = _segment_issues(state, segment_id)
 
-        with st.expander(f"{segment_id} - strona {segment.page_number}", expanded=index == 0):
+        with st.expander(
+            _t("review_expander_label", segment_id=segment_id, page_number=segment.page_number),
+            expanded=index == 0,
+        ):
             left, right = st.columns(2)
             left.markdown(_t("source"))
             left.code(segment.source_text)

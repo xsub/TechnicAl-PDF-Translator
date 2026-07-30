@@ -48,6 +48,20 @@ def review_translation(
             source_preview=text_preview(segment.source_text),
             translation_preview=text_preview(translation.translated_text),
         )
+        if checkpoint_callback:
+            checkpoint_callback(
+                {
+                    **state,
+                    "review_results": review_results,
+                    "llm_inflight": {
+                        "operation": "review",
+                        "segment_id": segment.segment_id,
+                        "index": index,
+                        "total": total,
+                    },
+                    "status": f"reviewing {index}/{total}",
+                }
+            )
         emit_progress(
             progress_callback,
             stage="review",
@@ -61,6 +75,7 @@ def review_translation(
         partial_state = {
             **state,
             "review_results": review_results,
+            "llm_inflight": None,
             "status": f"reviewing {index}/{total}",
         }
         if checkpoint_callback:
@@ -84,4 +99,4 @@ def review_translation(
             segment_id=segment.segment_id,
         )
 
-    return {**state, "review_results": review_results, "status": "translation_reviewed"}
+    return {**state, "review_results": review_results, "llm_inflight": None, "status": "translation_reviewed"}

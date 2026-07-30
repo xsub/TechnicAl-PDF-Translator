@@ -31,6 +31,7 @@ class TranslationState(TypedDict, total=False):
     persistent_translation_cache_hits: int
     translation_memory_misses: int
     translation_cache_scope: dict[str, Any]
+    llm_inflight: dict[str, Any] | None
     operator_decisions: dict[str, OperatorDecision]
     output_pdf_path: str | None
     output_verification: OutputVerification | None

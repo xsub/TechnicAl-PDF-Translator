@@ -72,6 +72,7 @@ def translate_segments(
                 "persistent_translation_cache_hits": persistent_cache_hits,
                 "translation_memory_misses": memory_misses,
                 "translation_cache_scope": cache_scope,
+                "llm_inflight": None,
                 "status": f"translating {index}/{total}",
             }
             if checkpoint_callback:
@@ -108,6 +109,7 @@ def translate_segments(
                 "persistent_translation_cache_hits": persistent_cache_hits,
                 "translation_memory_misses": memory_misses,
                 "translation_cache_scope": cache_scope,
+                "llm_inflight": None,
                 "status": f"translating {index}/{total}",
             }
             if checkpoint_callback:
@@ -131,6 +133,26 @@ def translate_segments(
             )
             continue
 
+        if client is None:
+            client = build_translator(config)
+        if checkpoint_callback:
+            checkpoint_callback(
+                {
+                    **state,
+                    "translations": translations,
+                    "translation_memory_hits": memory_hits,
+                    "persistent_translation_cache_hits": persistent_cache_hits,
+                    "translation_memory_misses": memory_misses,
+                    "translation_cache_scope": cache_scope,
+                    "llm_inflight": {
+                        "operation": "translate",
+                        "segment_id": segment.segment_id,
+                        "index": index,
+                        "total": total,
+                    },
+                    "status": f"translating {index}/{total}",
+                }
+            )
         emit_progress(
             progress_callback,
             stage="translate",
@@ -139,8 +161,6 @@ def translate_segments(
             total=total,
             segment_id=segment.segment_id,
         )
-        if client is None:
-            client = build_translator(config)
         translations[segment.segment_id] = client.translate(segment, glossary, config)
         translation = translations[segment.segment_id]
         memory_misses += 1
@@ -154,6 +174,7 @@ def translate_segments(
             "persistent_translation_cache_hits": persistent_cache_hits,
             "translation_memory_misses": memory_misses,
             "translation_cache_scope": cache_scope,
+            "llm_inflight": None,
             "status": f"translating {index}/{total}",
         }
         if checkpoint_callback:
@@ -185,6 +206,7 @@ def translate_segments(
         "persistent_translation_cache_hits": persistent_cache_hits,
         "translation_memory_misses": memory_misses,
         "translation_cache_scope": cache_scope,
+        "llm_inflight": None,
         "status": "segments_translated",
     }
 
@@ -216,6 +238,21 @@ def revise_flagged_segments(
             findings=len(findings),
             current_preview=text_preview(current.translated_text),
         )
+        if checkpoint_callback:
+            checkpoint_callback(
+                {
+                    **state,
+                    "translations": translations,
+                    "revision_attempts": attempts,
+                    "llm_inflight": {
+                        "operation": "revise",
+                        "segment_id": segment_id,
+                        "index": index,
+                        "total": total,
+                    },
+                    "status": f"revising {index}/{total}",
+                }
+            )
         emit_progress(
             progress_callback,
             stage="revise",
@@ -230,6 +267,7 @@ def revise_flagged_segments(
             **state,
             "translations": translations,
             "revision_attempts": attempts,
+            "llm_inflight": None,
             "status": f"revising {index}/{total}",
         }
         if checkpoint_callback:
@@ -248,6 +286,7 @@ def revise_flagged_segments(
         "translations": translations,
         "revision_attempts": attempts,
         "revision_required_segments": [],
+        "llm_inflight": None,
         "status": "flagged_segments_revised",
     }
 
