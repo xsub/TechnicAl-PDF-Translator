@@ -11,8 +11,11 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
+from translator.domain.glossary import load_glossary
+from translator.domain.protected import validate_segment_invariants
 from translator.languages import LANGUAGE_OPTIONS, language_index
-from translator.schemas import JobConfig
+from translator.llm.clients import build_reviewer, build_translator
+from translator.schemas import JobConfig, ReviewFinding, TranslationResult
 from translator.storage import JobStore
 from translator.utils import new_job_id
 from translator.workflow import finalize_with_operator_decisions, resume_mvp_pipeline, run_mvp_pipeline
@@ -201,7 +204,30 @@ UI_TEXT = {
         "segments_to_show": "Ile segmentów pokazać",
         "source": "Źródło",
         "translation": "Tłumaczenie",
+        "current_translation": "Aktualne tłumaczenie",
         "approved_text": "Zatwierdzony tekst",
+        "operator_refinement_title": "Poprawka operatora z przerobieniem zdania",
+        "operator_refinement_caption": "Wpisz preferowaną frazę/termin. TechnicAl przerobi cały segment tak, żeby fraza pasowała składniowo i semantycznie do zdania.",
+        "operator_replace_from": "Fragment do zastąpienia",
+        "operator_replace_placeholder": "np. wysuszonej warstwie farby",
+        "operator_preferred_phrase": "Lepsza fraza / termin bazowy",
+        "operator_preferred_placeholder": "np. wyschnięta powłoka farby",
+        "operator_rewrite_button": "Przerób segment z tą frazą",
+        "operator_rewrite_missing_phrase": "Wpisz lepszą frazę lub termin bazowy.",
+        "operator_rewrite_spinner": "Przerabiam segment i sprawdzam wynik...",
+        "operator_rewrite_result": "Wynik poprawki operatora",
+        "operator_rewrite_applied": "Wynik został podstawiony do pola „Zatwierdzony tekst”.",
+        "operator_rewrite_source": "Tryb poprawki: `{mode}`.",
+        "operator_rewrite_mode_llm": "LLM + review",
+        "operator_rewrite_mode_local": "lokalna podmiana",
+        "operator_rewrite_local_warning": "To była tylko lokalna podmiana tekstu. Dla składniowej odmiany frazy wybierz realnego tłumacza OpenAI.",
+        "operator_rewrite_check_ok": "Kontrola po poprawce: brak krytycznych problemów walidacji; recenzent nie zgłasza krytycznych ani ważnych zastrzeżeń.",
+        "operator_rewrite_check_warning": "Kontrola po poprawce nadal zgłasza zastrzeżenia — obejrzyj je przed akceptacją.",
+        "operator_rewrite_review_unavailable": "Nie uruchomiłem realnego review tej poprawki. Sprawdzona jest tylko walidacja wartości chronionych.",
+        "operator_rewrite_review_verdict": "Werdykt recenzenta dla poprawki: `{verdict}`.",
+        "operator_rewrite_validation_issues": "Uwagi walidacji po poprawce",
+        "operator_rewrite_review_findings": "Uwagi recenzenta po poprawce",
+        "operator_refinement_note": "Fragment poprawiony przez użytkownika: preferowana fraza `{phrase}`.",
         "decision": "Decyzja",
         "action_edit": "Zapisz edycję",
         "action_accept": "Akceptuj",
@@ -378,7 +404,30 @@ UI_TEXT = {
         "segments_to_show": "How many segments to show",
         "source": "Source",
         "translation": "Translation",
+        "current_translation": "Current translation",
         "approved_text": "Approved text",
+        "operator_refinement_title": "Operator phrase refinement",
+        "operator_refinement_caption": "Enter the preferred phrase/term. TechnicAl rewrites the whole segment so the phrase fits the sentence syntactically and semantically.",
+        "operator_replace_from": "Text to replace",
+        "operator_replace_placeholder": "e.g. dried ink layer",
+        "operator_preferred_phrase": "Better phrase / base term",
+        "operator_preferred_placeholder": "e.g. dry ink film",
+        "operator_rewrite_button": "Rewrite segment with this phrase",
+        "operator_rewrite_missing_phrase": "Enter a better phrase or base term.",
+        "operator_rewrite_spinner": "Rewriting the segment and checking the result...",
+        "operator_rewrite_result": "Operator refinement result",
+        "operator_rewrite_applied": "The result was copied into the Approved text field.",
+        "operator_rewrite_source": "Refinement mode: `{mode}`.",
+        "operator_rewrite_mode_llm": "LLM + review",
+        "operator_rewrite_mode_local": "local replacement",
+        "operator_rewrite_local_warning": "This was only a local text replacement. Choose the real OpenAI translator for grammatical inflection of the phrase.",
+        "operator_rewrite_check_ok": "Post-refinement check: no critical validation issues; the reviewer reports no critical or major findings.",
+        "operator_rewrite_check_warning": "The post-refinement check still reports issues — review them before accepting.",
+        "operator_rewrite_review_unavailable": "I did not run a real review for this refinement. Only protected-value validation was checked.",
+        "operator_rewrite_review_verdict": "Reviewer verdict for this refinement: `{verdict}`.",
+        "operator_rewrite_validation_issues": "Validation issues after refinement",
+        "operator_rewrite_review_findings": "Reviewer findings after refinement",
+        "operator_refinement_note": "User-refined fragment: preferred phrase `{phrase}`.",
         "decision": "Decision",
         "action_edit": "Save edit",
         "action_accept": "Accept",
@@ -763,6 +812,231 @@ def _render_review_findings_table(state: dict) -> None:
         width="stretch",
         height=min(520, 140 + 32 * min(len(rows), 12)),
     )
+
+
+def _operator_refinement_result_key(segment_id: str) -> str:
+    return f"operator_refinement_result_{segment_id}"
+
+
+def _suggest_replacement_text(issues: list[object]) -> str:
+    for issue in issues:
+        evidence = str(getattr(issue, "translation_evidence", "") or getattr(issue, "translated_value", "") or "")
+        evidence = " ".join(evidence.split())
+        if evidence and len(evidence) <= 120:
+            return evidence
+    return ""
+
+
+def _render_operator_phrase_refinement(
+    segment: object,
+    translation: TranslationResult,
+    config: JobConfig,
+    *,
+    edit_key: str,
+    issues: list[object],
+) -> None:
+    segment_id = str(getattr(segment, "segment_id", "segment"))
+    replace_key = f"operator_replace_{segment_id}"
+    phrase_key = f"operator_phrase_{segment_id}"
+    result_key = _operator_refinement_result_key(segment_id)
+
+    st.session_state.setdefault(replace_key, _suggest_replacement_text(issues))
+    st.session_state.setdefault(phrase_key, "")
+
+    with st.container(border=True):
+        st.markdown(f"##### :material/edit_note: {_t('operator_refinement_title')}")
+        st.caption(_t("operator_refinement_caption"))
+
+        replace_col, phrase_col = st.columns(2)
+        replace_col.text_input(
+            _t("operator_replace_from"),
+            key=replace_key,
+            placeholder=_t("operator_replace_placeholder"),
+        )
+        phrase_col.text_input(
+            _t("operator_preferred_phrase"),
+            key=phrase_key,
+            placeholder=_t("operator_preferred_placeholder"),
+        )
+
+        if st.button(
+            _t("operator_rewrite_button"),
+            key=f"operator_rewrite_{segment_id}",
+            icon=":material/auto_fix_high:",
+        ):
+            preferred_phrase = str(st.session_state.get(phrase_key, "") or "").strip()
+            replace_phrase = str(st.session_state.get(replace_key, "") or "").strip()
+            if not preferred_phrase:
+                st.warning(_t("operator_rewrite_missing_phrase"))
+            else:
+                try:
+                    with st.spinner(_t("operator_rewrite_spinner")):
+                        result = _rewrite_translation_with_operator_phrase(
+                            segment,
+                            translation,
+                            config,
+                            preferred_phrase=preferred_phrase,
+                            replace_phrase=replace_phrase,
+                            issues=issues,
+                        )
+                except Exception as exc:  # noqa: BLE001 - show failed refinement without losing operator edits
+                    st.error(str(exc))
+                    return
+                st.session_state[result_key] = result
+                st.session_state[edit_key] = result["proposed_text"]
+                st.rerun()
+
+        result = st.session_state.get(result_key)
+        if result:
+            _render_operator_refinement_result(result)
+
+
+def _rewrite_translation_with_operator_phrase(
+    segment: object,
+    translation: TranslationResult,
+    config: JobConfig,
+    *,
+    preferred_phrase: str,
+    replace_phrase: str,
+    issues: list[object],
+) -> dict[str, object]:
+    glossary = load_glossary(config.glossary_path)
+    mode = "local"
+
+    if config.translator_provider == "openai" and _has_env_value("OPENAI_API_KEY"):
+        mode = "llm"
+        explanation_parts = [
+            "The human operator requires a terminology refinement.",
+            f"Preferred target-language base phrase: {preferred_phrase!r}.",
+            "Rewrite the full target-language segment, not only the phrase.",
+            "Use the preferred phrase exactly when grammatical; otherwise inflect it so the full sentence is syntactically natural.",
+            "Preserve the source meaning and all protected values, units, identifiers and references.",
+            "Add no explanations to the translated text.",
+        ]
+        if replace_phrase:
+            explanation_parts.insert(2, f"Current target-language wording to replace: {replace_phrase!r}.")
+        if issues:
+            explanation_parts.append(
+                "Existing review/validation context: "
+                + "; ".join(_issue_label(issue) for issue in issues[:5])
+            )
+        operator_finding = ReviewFinding(
+            segment_id=str(getattr(segment, "segment_id", translation.segment_id)),
+            severity="major",
+            category="operator_phrase_refinement",
+            source_evidence=str(getattr(segment, "source_text", "")),
+            translation_evidence=translation.translated_text,
+            explanation=" ".join(explanation_parts),
+            proposed_translation=None,
+            confidence="high",
+        )
+        revised = build_translator(config).revise(
+            segment,  # type: ignore[arg-type]
+            translation,
+            [operator_finding],
+            glossary,
+            config,
+        )
+    else:
+        revised_text = _local_operator_phrase_rewrite(
+            translation.translated_text,
+            replace_phrase=replace_phrase,
+            preferred_phrase=preferred_phrase,
+        )
+        revised = translation.model_copy(
+            update={
+                "translated_text": revised_text,
+                "translator_notes": [
+                    *translation.translator_notes,
+                    f"Operator local phrase refinement: {preferred_phrase}",
+                ],
+                "confidence": "medium",
+            }
+        )
+
+    validation_issues = validate_segment_invariants(segment, revised)  # type: ignore[arg-type]
+    validation_issues.extend(
+        glossary.validate_translation(
+            str(getattr(segment, "segment_id", translation.segment_id)),
+            str(getattr(segment, "source_text", "")),
+            revised.translated_text,
+            config.target_language,
+        )
+    )
+
+    review_result = None
+    if config.reviewer_provider != "mock" and not _validate_provider_configuration("mock", config.reviewer_provider):
+        review_result = build_reviewer(config).review(segment, revised, glossary, config)  # type: ignore[arg-type]
+
+    return {
+        "mode": mode,
+        "preferred_phrase": preferred_phrase,
+        "replace_phrase": replace_phrase,
+        "proposed_text": revised.translated_text,
+        "validation_issues": validation_issues,
+        "review_result": review_result,
+        "translation_token_usage": revised.token_usage,
+        "review_token_usage": getattr(review_result, "token_usage", None),
+    }
+
+
+def _local_operator_phrase_rewrite(text: str, *, replace_phrase: str, preferred_phrase: str) -> str:
+    if replace_phrase:
+        pattern = re.compile(re.escape(replace_phrase), flags=re.IGNORECASE)
+        rewritten, count_replacements = pattern.subn(preferred_phrase, text, count=1)
+        if count_replacements:
+            return rewritten
+    if preferred_phrase.lower() in text.lower():
+        return text
+    return text
+
+
+def _render_operator_refinement_result(result: dict[str, object]) -> None:
+    mode_key = "operator_rewrite_mode_llm" if result.get("mode") == "llm" else "operator_rewrite_mode_local"
+    mode_label = _t(mode_key)
+    validation_issues = list(result.get("validation_issues") or [])
+    review_result = result.get("review_result")
+    review_findings = list(getattr(review_result, "findings", []) or []) if review_result else []
+    has_validation_blockers = any(str(getattr(issue, "severity", "")).lower() == "critical" for issue in validation_issues)
+    has_review_blockers = any(str(getattr(finding, "severity", "")).lower() in {"critical", "major"} for finding in review_findings)
+
+    st.markdown(_t("operator_rewrite_result"))
+    st.caption(_t("operator_rewrite_source", mode=mode_label))
+    st.info(str(result.get("proposed_text") or ""))
+    st.success(_t("operator_rewrite_applied"))
+
+    if result.get("mode") != "llm":
+        st.warning(_t("operator_rewrite_local_warning"))
+
+    if review_result:
+        st.caption(_t("operator_rewrite_review_verdict", verdict=getattr(review_result, "verdict", "-")))
+    else:
+        st.caption(_t("operator_rewrite_review_unavailable"))
+
+    if has_validation_blockers or has_review_blockers:
+        st.warning(_t("operator_rewrite_check_warning"))
+    elif review_result:
+        st.success(_t("operator_rewrite_check_ok"))
+
+    if validation_issues:
+        st.markdown(_t("operator_rewrite_validation_issues"))
+        for issue in validation_issues:
+            st.warning(_issue_label(issue))
+
+    if review_findings:
+        st.markdown(_t("operator_rewrite_review_findings"))
+        for finding in review_findings:
+            st.warning(_issue_label(finding))
+
+
+def _operator_refinement_note(segment_id: str) -> str | None:
+    result = st.session_state.get(_operator_refinement_result_key(segment_id))
+    if not result:
+        return None
+    phrase = str(result.get("preferred_phrase") or "").strip()
+    if not phrase:
+        return None
+    return _t("operator_refinement_note", phrase=phrase)
 
 
 def _localized_severity(severity: str) -> str:
@@ -1715,6 +1989,11 @@ def _render_human_review(state: dict) -> None:
     if not unresolved_segments:
         return
 
+    config = state.get("config")
+    if not config:
+        st.error(_t("empty_checkpoint"))
+        return
+
     segments = {segment.segment_id: segment for segment in state.get("segments", [])}
     translations = state.get("translations", {})
 
@@ -1790,6 +2069,8 @@ def _render_human_review(state: dict) -> None:
         segment = segments[segment_id]
         translation = translations[segment_id]
         issues = _segment_issues(state, segment_id)
+        edit_key = f"edit_{segment_id}"
+        st.session_state.setdefault(edit_key, translation.translated_text)
 
         with st.expander(
             _t("review_expander_label", segment_id=segment_id, page_number=segment.page_number),
@@ -1798,11 +2079,20 @@ def _render_human_review(state: dict) -> None:
             left, right = st.columns(2)
             left.markdown(_t("source"))
             left.code(segment.source_text)
-            right.markdown(_t("translation"))
-            edited = right.text_area(
+            right.markdown(_t("current_translation"))
+            right.write(translation.translated_text)
+
+            _render_operator_phrase_refinement(
+                segment,
+                translation,
+                config,
+                edit_key=edit_key,
+                issues=issues,
+            )
+
+            edited = st.text_area(
                 _t("approved_text"),
-                value=translation.translated_text,
-                key=f"edit_{segment_id}",
+                key=edit_key,
             )
 
             action = st.segmented_control(
@@ -1822,7 +2112,11 @@ def _render_human_review(state: dict) -> None:
                 for issue in issues:
                     st.warning(_issue_label(issue))
 
-            decisions[segment_id] = {"action": action or "edit", "text": edited}
+            decisions[segment_id] = {
+                "action": action or "edit",
+                "text": edited,
+                "note": _operator_refinement_note(segment_id),
+            }
 
     with st.container(horizontal=True):
         if st.button(_t("save_decisions"), type="primary", icon=":material/save:"):
