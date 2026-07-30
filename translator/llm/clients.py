@@ -5,7 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Literal, Protocol
 
 from translator.debug import log_debug, log_exception, text_preview
 from translator.domain.glossary import DomainGlossary
@@ -14,6 +14,7 @@ from translator.schemas import (
     JobConfig,
     ReviewFinding,
     ReviewResult,
+    TokenUsage,
     TranslationResult,
 )
 
@@ -201,7 +202,7 @@ class OpenAITranslator:
             protected_tokens=len(segment.protected_tokens),
             source_preview=text_preview(segment.source_text),
         )
-        result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult)
+        result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult, operation="translate")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
         return result
@@ -226,7 +227,7 @@ class OpenAITranslator:
             findings=len(findings),
             current_preview=text_preview(current.translated_text),
         )
-        result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult)
+        result = _invoke_openai_structured(self.model_name, prompt, payload, TranslationResult, operation="revise")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
         return result
@@ -254,7 +255,7 @@ class OpenAIReviewer:
             source_preview=text_preview(segment.source_text),
             translation_preview=text_preview(translation.translated_text),
         )
-        result = _invoke_openai_structured(self.model_name, prompt, payload, ReviewResult)
+        result = _invoke_openai_structured(self.model_name, prompt, payload, ReviewResult, operation="review")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
         return result
@@ -282,7 +283,7 @@ class AnthropicReviewer:
             source_preview=text_preview(segment.source_text),
             translation_preview=text_preview(translation.translated_text),
         )
-        result = _invoke_anthropic_structured(self.model_name, prompt, payload, ReviewResult)
+        result = _invoke_anthropic_structured(self.model_name, prompt, payload, ReviewResult, operation="review")
         if result.segment_id != segment.segment_id:
             result = result.model_copy(update={"segment_id": segment.segment_id})
         return result
@@ -304,7 +305,14 @@ def build_reviewer(config: JobConfig) -> ReviewerClient:
     return MockTechnicalReviewer()
 
 
-def _invoke_openai_structured(model_name: str, system_prompt: str, payload: dict, schema: type):
+def _invoke_openai_structured(
+    model_name: str,
+    system_prompt: str,
+    payload: dict,
+    schema: type,
+    *,
+    operation: Literal["translate", "review", "revise"],
+):
     try:
         from langchain_openai import ChatOpenAI
     except ImportError as exc:
@@ -329,7 +337,7 @@ def _invoke_openai_structured(model_name: str, system_prompt: str, payload: dict
         timeout=timeout,
         max_retries=max_retries,
     )
-    structured = model.with_structured_output(schema)
+    structured = model.with_structured_output(schema, include_raw=True)
     try:
         result = structured.invoke(
             [
@@ -337,12 +345,16 @@ def _invoke_openai_structured(model_name: str, system_prompt: str, payload: dict
                 ("user", json.dumps(payload, ensure_ascii=False)),
             ]
         )
-        parsed = result if isinstance(result, schema) else schema.model_validate(result)
+        parsed, raw = _parse_structured_result(result, schema)
+        usage = _extract_token_usage(raw, provider="openai", model=model_name, operation=operation)
+        if hasattr(parsed, "model_copy"):
+            parsed = parsed.model_copy(update={"token_usage": usage})
         log_debug(
             "llm.openai.invoke.done",
             model=model_name,
             schema=schema.__name__,
             duration_s=round(time.perf_counter() - started_at, 3),
+            token_usage=usage.model_dump(mode="json") if usage else None,
             result_summary=_result_summary(parsed),
         )
         return parsed
@@ -359,7 +371,14 @@ def _invoke_openai_structured(model_name: str, system_prompt: str, payload: dict
         raise
 
 
-def _invoke_anthropic_structured(model_name: str, system_prompt: str, payload: dict, schema: type):
+def _invoke_anthropic_structured(
+    model_name: str,
+    system_prompt: str,
+    payload: dict,
+    schema: type,
+    *,
+    operation: Literal["translate", "review", "revise"],
+):
     try:
         from langchain_anthropic import ChatAnthropic
     except ImportError as exc:
@@ -384,7 +403,7 @@ def _invoke_anthropic_structured(model_name: str, system_prompt: str, payload: d
         timeout=timeout,
         max_retries=max_retries,
     )
-    structured = model.with_structured_output(schema)
+    structured = model.with_structured_output(schema, include_raw=True)
     try:
         result = structured.invoke(
             [
@@ -392,12 +411,16 @@ def _invoke_anthropic_structured(model_name: str, system_prompt: str, payload: d
                 ("user", json.dumps(payload, ensure_ascii=False)),
             ]
         )
-        parsed = result if isinstance(result, schema) else schema.model_validate(result)
+        parsed, raw = _parse_structured_result(result, schema)
+        usage = _extract_token_usage(raw, provider="anthropic", model=model_name, operation=operation)
+        if hasattr(parsed, "model_copy"):
+            parsed = parsed.model_copy(update={"token_usage": usage})
         log_debug(
             "llm.anthropic.invoke.done",
             model=model_name,
             schema=schema.__name__,
             duration_s=round(time.perf_counter() - started_at, 3),
+            token_usage=usage.model_dump(mode="json") if usage else None,
             result_summary=_result_summary(parsed),
         )
         return parsed
@@ -412,6 +435,84 @@ def _invoke_anthropic_structured(model_name: str, system_prompt: str, payload: d
             payload_summary=_payload_summary(payload),
         )
         raise
+
+
+def _parse_structured_result(result: Any, schema: type) -> tuple[Any, Any | None]:
+    if isinstance(result, dict) and "parsed" in result:
+        parsing_error = result.get("parsing_error")
+        if parsing_error:
+            raise RuntimeError(f"Structured output parsing failed: {parsing_error}")
+        parsed = result.get("parsed")
+        raw = result.get("raw")
+        if parsed is None:
+            raise RuntimeError("Structured output parsing returned no parsed result.")
+        return parsed if isinstance(parsed, schema) else schema.model_validate(parsed), raw
+
+    return result if isinstance(result, schema) else schema.model_validate(result), None
+
+
+def _extract_token_usage(
+    raw_message: Any | None,
+    *,
+    provider: Literal["openai", "anthropic", "mock"],
+    model: str,
+    operation: Literal["translate", "review", "revise"],
+) -> TokenUsage | None:
+    if raw_message is None:
+        return None
+
+    usage_candidates = [
+        getattr(raw_message, "usage_metadata", None),
+        (getattr(raw_message, "response_metadata", None) or {}).get("token_usage")
+        if isinstance(getattr(raw_message, "response_metadata", None), dict)
+        else None,
+        (getattr(raw_message, "response_metadata", None) or {}).get("usage")
+        if isinstance(getattr(raw_message, "response_metadata", None), dict)
+        else None,
+    ]
+
+    for usage in usage_candidates:
+        if not isinstance(usage, dict):
+            continue
+
+        input_tokens = _usage_int(usage, "input_tokens", "prompt_tokens", "input_token_count")
+        output_tokens = _usage_int(usage, "output_tokens", "completion_tokens", "output_token_count")
+        total_tokens = _usage_int(usage, "total_tokens", "total_token_count")
+        if total_tokens == 0:
+            total_tokens = input_tokens + output_tokens
+
+        if input_tokens or output_tokens or total_tokens:
+            return TokenUsage(
+                provider=provider,
+                model=model,
+                operation=operation,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            )
+
+    log_debug(
+        "llm.token_usage.unavailable",
+        provider=provider,
+        model=model,
+        operation=operation,
+        raw_type=type(raw_message).__name__,
+        response_metadata=getattr(raw_message, "response_metadata", None),
+        usage_metadata=getattr(raw_message, "usage_metadata", None),
+    )
+    return None
+
+
+def _usage_int(usage: dict, *keys: str) -> int:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    return 0
 
 
 def _segment_payload(segment: DocumentSegment, glossary: DomainGlossary, config: JobConfig) -> dict:

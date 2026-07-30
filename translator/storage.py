@@ -183,6 +183,7 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         for finding in result.findings
     ]
     output_pdf_path = state.get("output_pdf_path")
+    token_usage = _token_usage_summary(state)
     metrics = {
         "segments_total": len(state.get("segments", [])),
         "segments_auto_accepted": len(state.get("segments", [])) - len(state.get("unresolved_segments", [])),
@@ -196,6 +197,10 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         "translation_memory_hits": state.get("translation_memory_hits", 0),
         "persistent_translation_cache_hits": state.get("persistent_translation_cache_hits", 0),
         "translation_memory_misses": state.get("translation_memory_misses", 0),
+        "llm_requests": token_usage["requests"],
+        "llm_input_tokens": token_usage["input_tokens"],
+        "llm_output_tokens": token_usage["output_tokens"],
+        "llm_total_tokens": token_usage["total_tokens"],
     }
     return JobReport(
         job_id=state["job_id"],
@@ -212,3 +217,22 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         review_findings=review_findings,
         output_verification=state.get("output_verification"),
     )
+
+
+def _token_usage_summary(state: TranslationState) -> dict[str, int]:
+    usages = [
+        translation.token_usage
+        for translation in state.get("translations", {}).values()
+        if translation.token_usage is not None
+    ]
+    usages.extend(
+        result.token_usage
+        for result in state.get("review_results", {}).values()
+        if result.token_usage is not None
+    )
+    return {
+        "requests": len(usages),
+        "input_tokens": sum(usage.input_tokens for usage in usages),
+        "output_tokens": sum(usage.output_tokens for usage in usages),
+        "total_tokens": sum(usage.total_tokens for usage in usages),
+    }

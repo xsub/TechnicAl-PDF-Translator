@@ -33,6 +33,7 @@ The UI shows the current job checkpoint, debug/status feedback for the active se
 - persistent SQLite translation cache across jobs and app restarts,
 - optional LangGraph workflow structure,
 - Streamlit UI for progress, live translation preview, issues and operator decisions,
+- live LLM token usage counters for translation/review requests,
 - output PDF generation with ReportLab,
 - output PDF verification by extracting the generated PDF text again,
 - JSON audit report and minimal SQLite job storage.
@@ -128,6 +129,8 @@ The persistent translation cache lives in `storage/jobs.db` next to job checkpoi
 4. the LLM only if all cache lookups miss.
 
 Cache keys include the normalized source segment, source language, target language, domain, translator provider/model, glossary hash and translator prompt hash. This keeps reuse fast but avoids mixing translations created under different language or terminology settings.
+
+Token usage is tracked from provider response metadata after each real LLM request completes. Cached translations and mock mode do not add token usage to the current job counters.
 
 Out of scope for the first MVP:
 

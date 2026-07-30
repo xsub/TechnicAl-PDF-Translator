@@ -19,6 +19,7 @@ BlockType = Literal[
 IssueSeverity = Literal["info", "warning", "critical"]
 ReviewSeverity = Literal["critical", "major", "minor", "style"]
 Confidence = Literal["high", "medium", "low"]
+LLMOperation = Literal["translate", "review", "revise"]
 
 
 class ProtectedToken(BaseModel):
@@ -59,6 +60,15 @@ class DocumentSegment(BaseModel):
     protected_tokens: list[ProtectedToken] = Field(default_factory=list)
 
 
+class TokenUsage(BaseModel):
+    provider: Literal["openai", "anthropic", "mock"]
+    model: str
+    operation: LLMOperation
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
 class TranslationResult(BaseModel):
     segment_id: str
     translated_text: str
@@ -66,6 +76,7 @@ class TranslationResult(BaseModel):
     uncertain_terms: list[str] = Field(default_factory=list)
     translator_notes: list[str] = Field(default_factory=list)
     confidence: Confidence = "medium"
+    token_usage: TokenUsage | None = None
 
 
 class ValidationIssue(BaseModel):
@@ -104,6 +115,7 @@ class ReviewResult(BaseModel):
     segment_id: str
     verdict: Literal["accept", "revise", "human_review"]
     findings: list[ReviewFinding] = Field(default_factory=list)
+    token_usage: TokenUsage | None = None
 
 
 class OperatorDecision(BaseModel):

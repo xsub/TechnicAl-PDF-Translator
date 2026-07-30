@@ -92,6 +92,12 @@ UI_TEXT = {
         "yes": "tak",
         "no": "nie",
         "cache_status": "Cache tłumaczeń: job `{job_hits}`, trwały `{persistent_hits}`, świeże requesty LLM `{llm_calls}`.",
+        "token_usage_header": "Zużycie tokenów LLM",
+        "llm_requests_metric": "Requesty LLM",
+        "input_tokens_metric": "Input tokens",
+        "output_tokens_metric": "Output tokens",
+        "total_tokens_metric": "Total tokens",
+        "no_token_usage_yet": "Tokeny pojawią się po zakończeniu pierwszego realnego requestu LLM. Cache i mock nie doliczają tokenów.",
         "mock_result_warning": "Ten wynik powstał w trybie mock. To tryb testowy przepływu, nie prawdziwe tłumaczenie dokumentu. Dla realnego PDF-a wybierz tłumacza OpenAI.",
         "live_preview": "Podgląd na żywo tłumaczenia",
         "translated_saved": "Przetłumaczone i zapisane: {done}/{total}",
@@ -198,6 +204,12 @@ UI_TEXT = {
         "yes": "yes",
         "no": "no",
         "cache_status": "Translation cache: job `{job_hits}`, persistent `{persistent_hits}`, fresh LLM requests `{llm_calls}`.",
+        "token_usage_header": "LLM token usage",
+        "llm_requests_metric": "LLM requests",
+        "input_tokens_metric": "Input tokens",
+        "output_tokens_metric": "Output tokens",
+        "total_tokens_metric": "Total tokens",
+        "no_token_usage_yet": "Tokens will appear after the first real LLM request finishes. Cache and mock do not add tokens.",
         "mock_result_warning": "This result was created in mock mode. It is a workflow test, not a real document translation. For a real PDF, choose the OpenAI translator.",
         "live_preview": "Live translation preview",
         "translated_saved": "Translated and saved: {done}/{total}",
@@ -369,6 +381,36 @@ def _issue_severity(issue: object) -> str:
     return str(getattr(issue, "severity", "info")).lower()
 
 
+def _token_usage_summary(state: dict) -> dict[str, int]:
+    usages = [
+        getattr(translation, "token_usage", None)
+        for translation in state.get("translations", {}).values()
+    ]
+    usages.extend(
+        getattr(result, "token_usage", None)
+        for result in state.get("review_results", {}).values()
+    )
+    usages = [usage for usage in usages if usage is not None]
+    return {
+        "requests": len(usages),
+        "input_tokens": sum(int(getattr(usage, "input_tokens", 0) or 0) for usage in usages),
+        "output_tokens": sum(int(getattr(usage, "output_tokens", 0) or 0) for usage in usages),
+        "total_tokens": sum(int(getattr(usage, "total_tokens", 0) or 0) for usage in usages),
+    }
+
+
+def _render_token_usage_metrics(state: dict) -> None:
+    usage = _token_usage_summary(state)
+    st.markdown(f"##### {_t('token_usage_header')}")
+    cols = st.columns(4)
+    cols[0].metric(_t("llm_requests_metric"), f"{usage['requests']:,}")
+    cols[1].metric(_t("input_tokens_metric"), f"{usage['input_tokens']:,}")
+    cols[2].metric(_t("output_tokens_metric"), f"{usage['output_tokens']:,}")
+    cols[3].metric(_t("total_tokens_metric"), f"{usage['total_tokens']:,}")
+    if usage["requests"] == 0:
+        st.caption(_t("no_token_usage_yet"))
+
+
 def _status_update(status, *, label: str, state: str | None = None) -> None:
     update_kwargs = {"label": label, "expanded": True}
     if state:
@@ -429,19 +471,22 @@ def _make_progress_callback(
                 return
 
             translations_count = len(preview_state.get("translations", {}))
+            usage = _token_usage_summary(preview_state)
             preview_key = (
                 preview_state.get("job_id"),
                 preview_state.get("status"),
                 len(preview_state.get("segments", [])),
                 translations_count,
                 len(preview_state.get("review_results", {})),
+                usage["total_tokens"],
+                usage["requests"],
             )
             if preview_key != last_preview_key["value"]:
                 last_preview_key["value"] = preview_key
                 with live_preview_slot.container():
                     _render_live_translation_preview(
                         preview_state,
-                        title="Podgląd na żywo tłumaczenia",
+                        title=_t("live_preview"),
                     )
 
     return on_progress
@@ -566,6 +611,7 @@ def _render_status(state: dict) -> None:
     cols[2].metric(_t("review_metric"), review_findings)
     cols[3].metric(_t("decisions_metric"), len(unresolved_segments))
     cols[4].metric(_t("pdf_metric"), _t("yes") if state.get("output_pdf_path") else _t("no"))
+    _render_token_usage_metrics(state)
     st.caption(
         _t(
             "cache_status",
@@ -594,6 +640,7 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
 
     with st.container(border=True):
         st.markdown(f"#### :material/visibility: {title}")
+        _render_token_usage_metrics(state)
         st.progress(
             min(max(progress_ratio, 0.0), 1.0),
             text=_t("translated_saved", done=done, total=total or "?"),

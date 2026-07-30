@@ -318,6 +318,7 @@ def copy_translation_from_cache(
         update={
             "segment_id": segment.segment_id,
             "translator_notes": notes,
+            "token_usage": None,
         }
     )
 
