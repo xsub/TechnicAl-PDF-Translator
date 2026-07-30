@@ -86,7 +86,7 @@ class PipelineProcessingTests(unittest.TestCase):
             reviewed_events = [
                 event
                 for event in progress_events
-                if event["message"] == "Pipeline: segment po review"
+                if event["message"] == "Pipeline: segment po recenzji"
             ]
             self.assertTrue(reviewed_events)
             self.assertEqual(reviewed_events[-1]["translations_done"], 2)

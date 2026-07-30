@@ -152,7 +152,7 @@ def review_translation(
                     emit_progress(
                         progress_callback,
                         stage="review",
-                        message="Segment po review",
+                        message="Segment po recenzji",
                         current=len(review_results),
                         total=total,
                         segment_id=item.segment.segment_id,

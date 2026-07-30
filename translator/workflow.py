@@ -129,9 +129,9 @@ def resume_mvp_pipeline(
             progress_callback,
             stage="pipeline",
             message=(
-                "Wznawiam pipeline tłumaczenie→review "
+                "Wznawiam pipeline tłumaczenie→recenzja "
                 f"({len(state.get('translations', {}))}/{len(state.get('segments', []))} tłumaczeń, "
-                f"{len(state.get('review_results', {}))}/{len(state.get('segments', []))} review)"
+                f"{len(state.get('review_results', {}))}/{len(state.get('segments', []))} recenzji)"
             ),
         )
         with DebugTimer("node.translate_and_review_segments.resume", job_id=state["job_id"], segments=len(state.get("segments", []))):
@@ -249,10 +249,10 @@ def _validate_review_resolve_loop(
             emit_progress(
                 progress_callback,
                 stage="review",
-                message=f"Review już gotowy z pipeline - cykl {cycle}/{max_cycles}",
+                message=f"Recenzja już gotowa z pipeline - cykl {cycle}/{max_cycles}",
             )
         else:
-            emit_progress(progress_callback, stage="review", message=f"Uruchamiam review - cykl {cycle}/{max_cycles}")
+            emit_progress(progress_callback, stage="review", message=f"Uruchamiam recenzję - cykl {cycle}/{max_cycles}")
             with DebugTimer("node.review_translation", job_id=state["job_id"], cycle=cycle):
                 state = review_translation(
                     state,

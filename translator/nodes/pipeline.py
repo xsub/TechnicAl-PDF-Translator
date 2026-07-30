@@ -312,7 +312,7 @@ def translate_and_review_segments(
         emit_progress(
             progress_callback,
             stage="pipeline",
-            message="Pipeline: tłumaczenie i review równolegle",
+            message="Pipeline: tłumaczenie i recenzja równolegle",
             **_pipeline_progress_fields(translations, review_results, total),
         )
 
@@ -447,7 +447,7 @@ def translate_and_review_segments(
                 emit_progress(
                     progress_callback,
                     stage="pipeline",
-                    message="Pipeline: segment po review",
+                    message="Pipeline: segment po recenzji",
                     **_pipeline_progress_fields(translations, review_results, total),
                     segment_id=item.segment.segment_id,
                 )

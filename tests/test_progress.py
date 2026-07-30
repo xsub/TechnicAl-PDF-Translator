@@ -33,7 +33,7 @@ class ProgressTests(unittest.TestCase):
         emit_progress(
             events.append,
             stage="pipeline",
-            message="Pipeline: segment po review",
+            message="Pipeline: segment po recenzji",
             current=323,
             total=564,
             segment_id="p002-b0017",

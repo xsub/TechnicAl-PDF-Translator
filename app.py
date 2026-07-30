@@ -28,7 +28,7 @@ WIDGET_KEY_COUNTER = count()
 PROVIDER_LABELS = {
     "pl": {
         "openai": "OpenAI - realne tłumaczenie",
-        "anthropic": "Anthropic - realny review",
+        "anthropic": "Anthropic - realna recenzja",
         "mock": "Mock - tylko test przepływu",
     },
     "en": {
@@ -54,7 +54,7 @@ MODE_LABELS = {
 UI_TEXT = {
     "pl": {
         "page_title": "TechnicAl. PDF Translator -- delta version",
-        "page_caption": "PDF -> segmenty -> tłumaczenie -> walidacja -> review -> decyzje operatora -> PDF.",
+        "page_caption": "PDF -> segmenty -> tłumaczenie -> walidacja -> recenzja -> decyzje operatora -> PDF.",
         "configuration": "Konfiguracja",
         "openai_status": "OpenAI: {status}",
         "anthropic_status": "Anthropic: {status}",
@@ -72,9 +72,9 @@ UI_TEXT = {
         "reviewer": "Recenzent",
         "parallelism": "Równoległość",
         "translation_concurrency": "Tłumaczenie",
-        "review_concurrency": "Review",
+        "review_concurrency": "Recenzja",
         "concurrency_help": "Ile requestów LLM wysyłać naraz. Wyższa wartość zwykle przyspiesza długi PDF, ale może trafić w limity API.",
-        "require_human_review": "Zatrzymaj przy istotnych problemach",
+        "require_human_review": "Zatrzymaj przy istotnych zastrzeżeniach",
         "debug": "Tryb debug - logi w terminalu",
         "debug_help": "Wypisuje do konsoli każdy etap, segment, request LLM, czas trwania i błędy. Nie loguje kluczy API.",
         "mock_warning": "Wybrany jest mock. To sprawdza przepływ aplikacji, ale nie tłumaczy prawdziwego dokumentu.",
@@ -83,7 +83,7 @@ UI_TEXT = {
         "select_pdf_first": "Najpierw wybierz PDF.",
         "empty_info": "Wrzuć PDF i uruchom workflow. Jeśli masz klucz w `.env`, domyślnie użyję OpenAI zamiast mocka.",
         "processing": "Przetwarzam dokument...",
-        "processing_detail": "Ekstrakcja PDF, segmentacja, tłumaczenie, walidacja i review.",
+        "processing_detail": "Ekstrakcja PDF, segmentacja, tłumaczenie, walidacja i recenzja.",
         "debug_enabled": "Tryb debug jest włączony - szczegółowe logi lecą do terminala i `storage/logs/`.",
         "workflow_start": "Startuję workflow...",
         "interrupted": "Przetwarzanie przerwane",
@@ -91,14 +91,14 @@ UI_TEXT = {
         "processed": "Dokument przetworzony",
         "status": "Status",
         "translator_provider": "tłumacz",
-        "review_provider": "review",
-        "parallelism_status": "parallel",
+        "review_provider": "recenzent",
+        "parallelism_status": "równolegle",
         "source_to_target": "języki",
-        "pipeline_progress_caption": "Postęp pipeline: tłumaczenia `{translations}/{segments}`, review `{reviews}/{segments}`.",
+        "pipeline_progress_caption": "Postęp pipeline: tłumaczenie `{translations}/{segments}`, recenzja `{reviews}/{segments}`.",
         "translation_progress_metric": "Tłumaczenie",
-        "progress_to_pdf": "Postęp do PDF: tłumaczenie `{translation_percent}%` | review `{review_percent}%`.",
+        "progress_to_pdf": "Postęp do PDF: tłumaczenie `{translation_percent}%` | recenzja `{review_percent}%`.",
         "translation_progress_bar": "Tłumaczenie {percent}% ({done}/{total})",
-        "review_progress_bar": "Review {percent}% ({done}/{total})",
+        "review_progress_bar": "Recenzja {percent}% ({done}/{total})",
         "pdf_progress_delta": "T {translation_percent}% | R {review_percent}%",
         "pdf_status_waiting": "czeka",
         "pdf_status_progress": "w toku",
@@ -106,17 +106,17 @@ UI_TEXT = {
         "pdf_status_ready_to_generate": "generuj",
         "pdf_status_download": "pobierz",
         "pdf_status_missing": "brak pliku",
-        "review_findings_caption": "Findingi review: `{review_findings}`.",
+        "review_findings_caption": "Uwagi recenzenta: `{review_findings}`.",
         "parallelism_change_pending": (
             "Suwaki UI ustawione na `{ui_translation}/{ui_review}`, ale aktualny checkpoint joba ma "
-            "`{job_translation}/{job_review}`. Zmiana zadziała przy następnym wznowieniu albo nowym jobie; "
+            "`{job_translation}/{job_review}`. Zmiana zadziała przy następnym wznowieniu albo nowym zadaniu; "
             "już uruchomionych requestów nie da się rozszerzyć w locie."
         ),
-        "resume_parallelism_applied": "Wznowienie używa równoległości z UI: tłumaczenie `{translation}`, review `{review}`.",
+        "resume_parallelism_applied": "Wznowienie używa równoległości z UI: tłumaczenie `{translation}`, recenzja `{review}`.",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segmenty",
-        "validation_metric": "Walidacja",
-        "review_metric": "Review",
+        "validation_metric": "Uwagi walidacji",
+        "review_metric": "Recenzja",
         "decisions_metric": "Do decyzji",
         "pdf_metric": "PDF",
         "yes": "tak",
@@ -151,7 +151,7 @@ UI_TEXT = {
         "progress_stage": "Etap",
         "progress_segment": "segment",
         "progress_stage_progress": "postęp etapu",
-        "pipeline_split_progress": "tłumaczenia {translations_done}/{translations_total} | review {reviews_done}/{reviews_total}",
+        "pipeline_split_progress": "tłumaczenie {translations_done}/{translations_total} | recenzja {reviews_done}/{reviews_total}",
         "progress_working": "Pracuję...",
         "mock_result_warning": "Ten wynik powstał w trybie mock. To tryb testowy przepływu, nie prawdziwe tłumaczenie dokumentu. Dla realnego PDF-a wybierz tłumacza OpenAI.",
         "live_preview": "Podgląd na żywo tłumaczenia",
@@ -177,18 +177,18 @@ UI_TEXT = {
         "saved_translation_count": "Zapisane tłumaczenia: {done}/{total}. Ten podgląd pochodzi z lokalnego checkpointu, więc przetrwa przeładowanie strony.",
         "joined_saved_text": "Sklejony tekst ze wszystkich zapisanych tłumaczeń",
         "review_decisions": "Decyzje operatora",
-        "bulk_review_note": "Nie renderuję wszystkich problemów naraz, bo przy dużym PDF-ie UI staje się nieużywalny. Możesz przejrzeć próbkę albo świadomie zaakceptować aktualne tłumaczenia zbiorczo.",
+        "bulk_review_note": "Nie pokazuję wszystkich uwag naraz, bo przy dużym PDF-ie UI staje się nieużywalny. Możesz przejrzeć próbkę albo świadomie zaakceptować aktualne tłumaczenia zbiorczo.",
         "bulk_review_warning": "Akcja zbiorcza ma sens tylko po realnym tłumaczeniu. Po trybie mock wygeneruje PDF z wieloma fragmentami po angielsku.",
         "accept_all": "Zaakceptuj wszystkie aktualne i wygeneruj PDF",
         "rendering_after_accept": "Generuję PDF po zbiorczej akceptacji...",
         "rendering_start": "Startuję renderowanie...",
         "pdf_after_accept": "PDF wygenerowany po zbiorczej akceptacji",
-        "pdf_ready_to_generate": "Tłumaczenie i review są gotowe. Możesz teraz wygenerować PDF.",
+        "pdf_ready_to_generate": "Tłumaczenie i recenzja są gotowe. Możesz teraz wygenerować PDF.",
         "generate_pdf": "Generuj PDF",
         "generating_pdf": "Generuję PDF...",
         "pdf_generated": "PDF wygenerowany",
         "hide_and_restart": "Ukryj wynik w tej sesji i zacznij od nowa",
-        "issue_filter": "Filtr problemów",
+        "issue_filter": "Filtr uwag",
         "no_segments_filter": "Brak segmentów dla wybranego filtra.",
         "segments_to_show": "Ile segmentów pokazać",
         "source": "Źródło",
@@ -198,7 +198,7 @@ UI_TEXT = {
         "action_edit": "Zapisz edycję",
         "action_accept": "Akceptuj",
         "action_keep_source": "Zostaw źródło",
-        "issues": "Problemy",
+        "issues": "Uwagi i zastrzeżenia",
         "save_decisions": "Zapisz decyzje dla pokazanych segmentów",
         "saving_decisions": "Zapisuję decyzje i generuję wynik...",
         "decisions_saved": "Decyzje zapisane i wynik wygenerowany",
@@ -218,8 +218,8 @@ UI_TEXT = {
         "translation_col": "tłumaczenie",
         "confidence_col": "pewność",
         "missing_openai_translator": "Brakuje `OPENAI_API_KEY` w `.env`, a wybrano tłumacza OpenAI.",
-        "missing_openai_reviewer": "Brakuje `OPENAI_API_KEY` w `.env`, a wybrano review OpenAI.",
-        "missing_anthropic_reviewer": "Brakuje `ANTHROPIC_API_KEY` w `.env`, a wybrano review Anthropic.",
+        "missing_openai_reviewer": "Brakuje `OPENAI_API_KEY` w `.env`, a wybrano recenzenta OpenAI.",
+        "missing_anthropic_reviewer": "Brakuje `ANTHROPIC_API_KEY` w `.env`, a wybrano recenzenta Anthropic.",
     },
     "en": {
         "page_title": "TechnicAl. PDF Translator -- delta version",
@@ -392,6 +392,52 @@ UI_TEXT = {
     },
 }
 
+OPERATION_LABELS_PL = {
+    "translate": "tłumaczenie",
+    "review": "recenzja",
+    "revise": "poprawka",
+    "pipeline": "pipeline",
+    "llm": "LLM",
+}
+
+ISSUE_TYPE_LABELS_PL = {
+    "missing_number": "brak liczby",
+    "changed_number": "zmieniona liczba",
+    "missing_unit": "brak jednostki",
+    "changed_unit": "zmieniona jednostka",
+    "missing_reference": "brak odwołania",
+    "changed_comparator": "zmieniony operator",
+    "missing_negation": "brak negacji",
+    "table_alignment": "układ tabeli",
+    "untranslated_fragment": "nieprzetłumaczony fragment",
+    "unexpected_addition": "nieoczekiwany dodatek",
+    "forbidden_term": "termin zabroniony",
+    "unchanged_source": "pozostawione źródło",
+    "terminology": "terminologia",
+    "chemical_terminology": "terminologia chemiczna",
+    "regulatory_terminology": "terminologia regulacyjna",
+    "omission": "pominięcie",
+    "addition": "dodana informacja",
+    "meaning": "znaczenie",
+    "number": "liczba",
+    "unit": "jednostka",
+    "negation": "negacja",
+    "table_relationship": "relacja w tabeli",
+    "inconsistency": "niespójność",
+    "manual_review": "do ręcznej oceny",
+    "issue": "uwaga",
+}
+
+SEVERITY_LABELS_PL = {
+    "critical": "KRYTYCZNE",
+    "major": "WAŻNE",
+    "minor": "DROBNE",
+    "warning": "OSTRZEŻENIE",
+    "style": "STYL",
+    "info": "INFO",
+    "manual_review": "RĘCZNA OCENA",
+}
+
 
 def _init_session_state() -> None:
     st.session_state.setdefault("last_error", None)
@@ -459,8 +505,10 @@ def _progress_message(raw_message: str) -> str:
         "Pipeline: używam zapisanego tłumaczenia identycznego segmentu": "Pipeline: reusing identical segment translation",
         "Pipeline: używam trwałego cache tłumaczenia": "Pipeline: using persistent translation cache",
         "Pipeline: tłumaczenie i review równolegle": "Pipeline: translating and reviewing in parallel",
+        "Pipeline: tłumaczenie i recenzja równolegle": "Pipeline: translating and reviewing in parallel",
         "Pipeline: segment przetłumaczony": "Pipeline: segment translated",
         "Pipeline: segment po review": "Pipeline: segment reviewed",
+        "Pipeline: segment po recenzji": "Pipeline: segment reviewed",
         "Tłumaczę segment": "Translating segment",
         "Tłumaczę segmenty równolegle": "Translating segments in parallel",
         "Segment przetłumaczony": "Segment translated",
@@ -469,6 +517,7 @@ def _progress_message(raw_message: str) -> str:
         "Recenzuję segment": "Reviewing segment",
         "Recenzuję segmenty równolegle": "Reviewing segments in parallel",
         "Segment po review": "Segment reviewed",
+        "Segment po recenzji": "Segment reviewed",
         "Rozstrzygam problemy i routing": "Resolving issues and routing",
         "Poprawiam zakwestionowany segment": "Revising flagged segment",
         "Generuję PDF wynikowy": "Generating output PDF",
@@ -486,10 +535,16 @@ def _progress_message(raw_message: str) -> str:
         (r"^Wymagana decyzja operatora: (\d+) segmentów$", r"Operator decision required: \1 segments"),
         (r"^Waliduję tłumaczenia - cykl (\d+)/(\d+)$", r"Validating translations - cycle \1/\2"),
         (r"^Uruchamiam review - cykl (\d+)/(\d+)$", r"Running review - cycle \1/\2"),
+        (r"^Uruchamiam recenzję - cykl (\d+)/(\d+)$", r"Running review - cycle \1/\2"),
         (r"^Review już gotowy z pipeline - cykl (\d+)/(\d+)$", r"Review already completed by pipeline - cycle \1/\2"),
+        (r"^Recenzja już gotowa z pipeline - cykl (\d+)/(\d+)$", r"Review already completed by pipeline - cycle \1/\2"),
         (r"^Wznawiam tłumaczenie od checkpointu \((\d+)/(\d+)\)$", r"Resuming translation from checkpoint (\1/\2)"),
         (
             r"^Wznawiam pipeline tłumaczenie→review \((\d+)/(\d+) tłumaczeń, (\d+)/(\d+) review\)$",
+            r"Resuming translation→review pipeline (\1/\2 translations, \3/\4 reviews)",
+        ),
+        (
+            r"^Wznawiam pipeline tłumaczenie→recenzja \((\d+)/(\d+) tłumaczeń, (\d+)/(\d+) recenzji\)$",
             r"Resuming translation→review pipeline (\1/\2 translations, \3/\4 reviews)",
         ),
     ]
@@ -628,10 +683,68 @@ def _validate_provider_configuration(translator_provider: str, reviewer_provider
 
 
 def _issue_label(issue: object) -> str:
-    severity = getattr(issue, "severity", "info")
-    issue_type = getattr(issue, "issue_type", getattr(issue, "category", "issue"))
+    severity = _localized_severity(str(getattr(issue, "severity", "info")))
+    issue_type = _localized_issue_type(str(getattr(issue, "issue_type", getattr(issue, "category", "issue"))))
     message = _localized_issue_message(str(getattr(issue, "message", getattr(issue, "explanation", ""))))
-    return f"{severity.upper()} - {issue_type}: {message}"
+    return f"{severity} - {issue_type}: {message}"
+
+
+def _localized_severity(severity: str) -> str:
+    severity = severity.lower()
+    if _ui_language() == "pl":
+        return SEVERITY_LABELS_PL.get(severity, severity.upper())
+    return severity.upper()
+
+
+def _localized_issue_type(issue_type: str) -> str:
+    if _ui_language() == "pl":
+        return ISSUE_TYPE_LABELS_PL.get(issue_type, issue_type.replace("_", " "))
+    return issue_type
+
+
+def _operation_label(operation: object) -> str:
+    operation_text = str(operation or "llm")
+    if _ui_language() == "pl":
+        return OPERATION_LABELS_PL.get(operation_text, operation_text.replace("_", " "))
+    return operation_text
+
+
+def _display_status_label(status: object) -> str:
+    status_text = str(status or "unknown")
+    if _ui_language() != "pl":
+        return status_text
+
+    exact = {
+        "created": "utworzono",
+        "pdf_extracted": "PDF wyodrębniony",
+        "segments_prepared": "segmenty przygotowane",
+        "segments_translated": "tłumaczenie zakończone",
+        "translation_reviewed": "recenzja zakończona",
+        "invariants_validated": "walidacja zakończona",
+        "findings_resolved": "uwagi rozstrzygnięte",
+        "needs_human_review": "wymagana decyzja operatora",
+        "operator_decisions_applied": "decyzje operatora zastosowane",
+        "rendering_with_unresolved_warnings": "generowanie z nierozstrzygniętymi uwagami",
+        "pdf_rendered": "PDF wygenerowany",
+        "completed": "zakończono",
+        "completed_with_output_warnings": "zakończono z ostrzeżeniami",
+        "missing_output_pdf": "brak PDF wynikowego",
+    }
+    if status_text in exact:
+        return exact[status_text]
+
+    patterns = [
+        (r"^translating (\d+)/(\d+)$", r"tłumaczenie \1/\2"),
+        (r"^reviewing (\d+)/(\d+)$", r"recenzja \1/\2"),
+        (r"^revising (\d+)/(\d+)$", r"poprawki \1/\2"),
+        (r"^pipeline translated (\d+)/(\d+), reviewed (\d+)/(\d+)$", r"pipeline: tłumaczenie \1/\2, recenzja \3/\4"),
+    ]
+    for pattern, replacement in patterns:
+        localized = re.sub(pattern, replacement, status_text)
+        if localized != status_text:
+            return localized
+
+    return status_text.replace("_", " ")
 
 
 def _segment_issues(state: dict, segment_id: str) -> list[object]:
@@ -725,7 +838,7 @@ def _render_token_usage_metrics(state: dict) -> None:
                 _t(
                     "llm_inflight_many",
                     active=active_requests,
-                    operation=inflight.get("operation", "llm"),
+                    operation=_operation_label(inflight.get("operation", "llm")),
                     provider=inflight.get("provider", "-"),
                     model=inflight.get("model", "-"),
                     segments=_inflight_segments_label(inflight),
@@ -735,7 +848,7 @@ def _render_token_usage_metrics(state: dict) -> None:
             st.caption(
                 _t(
                     "llm_inflight",
-                    operation=inflight.get("operation", "llm"),
+                    operation=_operation_label(inflight.get("operation", "llm")),
                     provider=inflight.get("provider", "-"),
                     model=inflight.get("model", "-"),
                     segment_id=inflight.get("segment_id", "-"),
@@ -842,7 +955,7 @@ def _render_parallel_tasks(state: dict, inflight: dict) -> None:
             {
                 _t("parallel_task_col_slot"): index,
                 _t("parallel_task_col_status"): _t("parallel_task_status"),
-                _t("parallel_task_col_operation"): operation,
+                _t("parallel_task_col_operation"): _operation_label(operation),
                 _t("parallel_task_col_segment"): segment_id,
                 _t("parallel_task_col_page"): getattr(segment, "page_number", "-") if segment else "-",
                 _t("parallel_task_col_provider"): provider,
@@ -1146,10 +1259,10 @@ def _render_status(state: dict) -> None:
             f" | {_t('translator_provider')}: `{config.translator_provider}`, "
             f"{_t('review_provider')}: `{config.reviewer_provider}`"
             f" | {_t('parallelism_status')}: `{translation_concurrency}/{review_concurrency}`"
-        )
+    )
 
     st.subheader(_t("status"))
-    st.write(f"`{state.get('status', 'unknown')}`{provider_note}")
+    st.write(f"`{_display_status_label(state.get('status', 'unknown'))}`{provider_note}")
     if config:
         ui_translation_concurrency, ui_review_concurrency = _current_parallelism(config)
         job_translation_concurrency = _config_int(config, "translation_concurrency", 4)
@@ -1568,6 +1681,7 @@ def _render_human_review(state: dict) -> None:
         all_severities,
         default=default_severities or all_severities,
         selection_mode="multi",
+        format_func=_localized_severity,
         key="issue_severity_filter",
     )
     if not selected_severities:
