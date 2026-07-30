@@ -48,7 +48,7 @@ MODE_LABELS = {
 
 UI_TEXT = {
     "pl": {
-        "page_title": "Technical PDF Translator MVP",
+        "page_title": "TechnicAl PDF Translator MVP",
         "page_caption": "PDF -> segmenty -> tłumaczenie -> walidacja -> review -> decyzje operatora -> PDF.",
         "configuration": "Konfiguracja",
         "openai_status": "OpenAI: {status}",
@@ -179,7 +179,7 @@ UI_TEXT = {
         "missing_anthropic_reviewer": "Brakuje `ANTHROPIC_API_KEY` w `.env`, a wybrano review Anthropic.",
     },
     "en": {
-        "page_title": "Technical PDF Translator MVP",
+        "page_title": "TechnicAl PDF Translator MVP",
         "page_caption": "PDF -> segments -> translation -> validation -> review -> operator decisions -> PDF.",
         "configuration": "Configuration",
         "openai_status": "OpenAI: {status}",
@@ -1244,7 +1244,7 @@ def _render_outputs(state: dict) -> None:
             )
 
 
-st.set_page_config(page_title="Technical PDF Translator", layout="wide")
+st.set_page_config(page_title="TechnicAl PDF Translator", layout="wide")
 _init_session_state()
 
 openai_ready = _has_env_value("OPENAI_API_KEY")
