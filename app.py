@@ -21,10 +21,10 @@ from translator.languages import LANGUAGE_OPTIONS, language_index
 from translator.llm.clients import build_reviewer, build_translator
 from translator.operator_decisions import build_selected_operator_decision
 from translator.operator_refinement import suggest_operator_preferred_phrase, suggest_operator_replacement_text
-from translator.operator_phrase_memory import UserPhraseMemory, UserPhraseMemoryMatch
+from translator.operator_phrase_memory import UserPhraseMemory, UserPhraseMemoryMatch, apply_phrase_match
 from translator.schemas import JobConfig, ReviewFinding, TranslationResult
 from translator.storage import JobStore
-from translator.utils import new_job_id
+from translator.utils import new_job_id, normalize_ws
 from translator.workflow import finalize_with_operator_decisions, resume_mvp_pipeline, run_mvp_pipeline
 
 
@@ -228,6 +228,7 @@ UI_TEXT = {
         "operator_preferred_phrase": "Lepsza fraza / termin bazowy",
         "operator_preferred_placeholder": "np. wyschnięta powłoka farby",
         "operator_phrase_memory_suggestion": "Z pamięci fraz operatora: `{replace}` → `{preferred}`.",
+        "operator_phrase_memory_auto_staged": "Propozycja z pamięci fraz została wstawiona do „Zatwierdzony tekst” i oznaczona jako edycja.",
         "operator_phrase_memory_saved": "Fraza została zapisana w pamięci operatora.",
         "operator_rewrite_button": "Przerób segment z tą frazą",
         "operator_rewrite_missing_phrase": "Wpisz lepszą frazę lub termin bazowy.",
@@ -240,9 +241,12 @@ UI_TEXT = {
         "operator_rewrite_applied": "Wynik został podstawiony do pola „Zatwierdzony tekst”.",
         "operator_rewrite_not_auto_applied": "Nie podstawiono automatycznie, bo pole „Zatwierdzony tekst” zmieniło się podczas pracy w tle.",
         "operator_rewrite_apply_result": "Wstaw wynik do zatwierdzonego tekstu",
+        "operator_rewrite_result_active": "Ten tekst jest teraz w polu „Zatwierdzony tekst” i zostanie zapisany jako edycja operatora.",
+        "operator_rewrite_result_inactive": "Ten wynik jest tylko propozycją. Nie zostanie zapisany, dopóki nie wstawisz go do „Zatwierdzony tekst”.",
         "operator_rewrite_source": "Tryb poprawki: `{mode}`.",
         "operator_rewrite_mode_llm": "LLM + review",
         "operator_rewrite_mode_local": "lokalna podmiana",
+        "operator_rewrite_mode_memory": "pamięć fraz operatora",
         "operator_rewrite_local_warning": "To była tylko lokalna podmiana tekstu. Dla składniowej odmiany frazy wybierz realnego tłumacza OpenAI.",
         "operator_rewrite_check_ok": "Kontrola po poprawce: brak krytycznych problemów walidacji; recenzent nie zgłasza krytycznych ani ważnych zastrzeżeń.",
         "operator_rewrite_check_warning": "Kontrola po poprawce nadal zgłasza zastrzeżenia — obejrzyj je przed akceptacją.",
@@ -256,6 +260,10 @@ UI_TEXT = {
         "action_edit": "Zapisz edycję",
         "action_accept": "Akceptuj",
         "action_keep_source": "Zostaw źródło",
+        "decision_state_skip": "Ten segment nie zostanie zapisany teraz.",
+        "decision_state_edit": "Zostanie zapisany jako edycja operatora.",
+        "decision_state_accept": "Zostanie zaakceptowane aktualne tłumaczenie.",
+        "decision_state_keep_source": "Zostanie zapisany tekst źródłowy.",
         "issues": "Uwagi i zastrzeżenia",
         "selected_decisions": "Do zapisania: `{count}` segmentów.",
         "save_decisions_hint": "Zapiszę tylko segmenty jawnie wybrane albo takie, w których zmieniono tekst. Samo pokazanie segmentu nie zapisuje decyzji.",
@@ -452,6 +460,7 @@ UI_TEXT = {
         "operator_preferred_phrase": "Better phrase / base term",
         "operator_preferred_placeholder": "e.g. dry ink film",
         "operator_phrase_memory_suggestion": "From operator phrase memory: `{replace}` → `{preferred}`.",
+        "operator_phrase_memory_auto_staged": "The phrase-memory suggestion was inserted into Approved text and marked as an edit.",
         "operator_phrase_memory_saved": "Phrase saved to operator memory.",
         "operator_rewrite_button": "Rewrite segment with this phrase",
         "operator_rewrite_missing_phrase": "Enter a better phrase or base term.",
@@ -464,9 +473,12 @@ UI_TEXT = {
         "operator_rewrite_applied": "The result was copied into the Approved text field.",
         "operator_rewrite_not_auto_applied": "I did not auto-apply it because the Approved text field changed while the background task was running.",
         "operator_rewrite_apply_result": "Insert result into approved text",
+        "operator_rewrite_result_active": "This text is now in the Approved text field and will be saved as an operator edit.",
+        "operator_rewrite_result_inactive": "This result is only a suggestion. It will not be saved until you insert it into Approved text.",
         "operator_rewrite_source": "Refinement mode: `{mode}`.",
         "operator_rewrite_mode_llm": "LLM + review",
         "operator_rewrite_mode_local": "local replacement",
+        "operator_rewrite_mode_memory": "operator phrase memory",
         "operator_rewrite_local_warning": "This was only a local text replacement. Choose the real OpenAI translator for grammatical inflection of the phrase.",
         "operator_rewrite_check_ok": "Post-refinement check: no critical validation issues; the reviewer reports no critical or major findings.",
         "operator_rewrite_check_warning": "The post-refinement check still reports issues — review them before accepting.",
@@ -480,6 +492,10 @@ UI_TEXT = {
         "action_edit": "Save edit",
         "action_accept": "Accept",
         "action_keep_source": "Keep source",
+        "decision_state_skip": "This segment will not be saved now.",
+        "decision_state_edit": "This will be saved as an operator edit.",
+        "decision_state_accept": "The current translation will be accepted.",
+        "decision_state_keep_source": "The source text will be kept.",
         "issues": "Issues",
         "selected_decisions": "Will save: `{count}` segments.",
         "save_decisions_hint": "Only explicitly selected segments or segments with changed text will be saved. Merely showing a segment does not save a decision.",
@@ -878,6 +894,10 @@ def _operator_refinement_result_key(segment_id: str) -> str:
     return f"operator_refinement_result_{segment_id}"
 
 
+def _operator_refinement_applied_key(segment_id: str) -> str:
+    return f"operator_refinement_applied_{segment_id}"
+
+
 def _operator_refinement_task_key(segment_id: str) -> str:
     return f"operator_refinement_task_{segment_id}"
 
@@ -1008,7 +1028,85 @@ def _apply_operator_refinement_defaults(
     return memory_match
 
 
-def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, fallback_text: str) -> None:
+def _stage_operator_approved_text(
+    segment_id: str,
+    *,
+    edit_key: str,
+    action_key: str,
+    proposed_text: object,
+    preferred_phrase: object,
+    replace_phrase: object = "",
+    source: str,
+    overwrite: bool = False,
+    expected_current: object | None = None,
+) -> bool:
+    proposed = str(proposed_text or "")
+    if not proposed.strip():
+        return False
+
+    current = str(st.session_state.get(edit_key, "") or "")
+    if not overwrite and expected_current is not None and current != str(expected_current or ""):
+        if normalize_ws(current) != normalize_ws(proposed):
+            return False
+
+    st.session_state[edit_key] = proposed
+    st.session_state[action_key] = "edit"
+    st.session_state[_operator_refinement_applied_key(segment_id)] = {
+        "source": source,
+        "proposed_text": proposed,
+        "preferred_phrase": str(preferred_phrase or ""),
+        "replace_phrase": str(replace_phrase or ""),
+        "digest": _text_digest(proposed),
+    }
+    return True
+
+
+def _auto_stage_phrase_memory_match(
+    segment_id: str,
+    *,
+    translation: TranslationResult,
+    memory_match: UserPhraseMemoryMatch | None,
+    edit_key: str,
+    action_key: str,
+) -> bool:
+    if not memory_match:
+        return False
+
+    if str(st.session_state.get(action_key, "") or "") == "keep_source":
+        return False
+
+    proposed_text = apply_phrase_match(translation.translated_text, memory_match)
+    if normalize_ws(proposed_text) == normalize_ws(translation.translated_text):
+        return False
+
+    applied = st.session_state.get(_operator_refinement_applied_key(segment_id))
+    previous_staged_text = (
+        str(applied.get("proposed_text") or "")
+        if isinstance(applied, dict) and applied.get("source") == "memory"
+        else ""
+    )
+    current_editor_text = str(st.session_state.get(edit_key, translation.translated_text) or "")
+    safe_to_stage = normalize_ws(current_editor_text) in {
+        normalize_ws(translation.translated_text),
+        normalize_ws(previous_staged_text),
+        normalize_ws(proposed_text),
+    }
+    if not safe_to_stage:
+        return False
+
+    return _stage_operator_approved_text(
+        segment_id,
+        edit_key=edit_key,
+        action_key=action_key,
+        proposed_text=proposed_text,
+        preferred_phrase=memory_match.preferred_text,
+        replace_phrase=memory_match.replace_text,
+        source="memory",
+        overwrite=True,
+    )
+
+
+def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, action_key: str, fallback_text: str) -> None:
     task_key = _operator_refinement_task_key(segment_id)
     task = st.session_state.get(task_key)
     if not isinstance(task, dict):
@@ -1028,10 +1126,20 @@ def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, fallback_t
 
     base_edit_value = str(task.get("edit_value_at_submit") or "")
     current_edit_value = str(st.session_state.get(edit_key, fallback_text) or "")
-    auto_applied = current_edit_value == base_edit_value
+    proposed_text = str(result.get("proposed_text") or "")
+    auto_applied = current_edit_value == base_edit_value or normalize_ws(current_edit_value) == normalize_ws(proposed_text)
     result["auto_applied_to_editor"] = auto_applied
     if auto_applied:
-        st.session_state[edit_key] = str(result.get("proposed_text") or "")
+        _stage_operator_approved_text(
+            segment_id,
+            edit_key=edit_key,
+            action_key=action_key,
+            proposed_text=proposed_text,
+            preferred_phrase=result.get("preferred_phrase"),
+            replace_phrase=result.get("replace_phrase"),
+            source=str(result.get("mode") or "rewrite"),
+            overwrite=True,
+        )
     st.session_state[_operator_refinement_result_key(segment_id)] = result
     st.session_state.pop(error_key, None)
 
@@ -1052,6 +1160,7 @@ def _render_operator_phrase_refinement(
     config: JobConfig,
     *,
     edit_key: str,
+    action_key: str,
     issues: list[object],
 ) -> None:
     segment_id = str(getattr(segment, "segment_id", "segment"))
@@ -1069,7 +1178,19 @@ def _render_operator_phrase_refinement(
         replace_key=replace_key,
         phrase_key=phrase_key,
     )
-    _poll_operator_refinement_task(segment_id, edit_key=edit_key, fallback_text=translation.translated_text)
+    memory_auto_staged = _auto_stage_phrase_memory_match(
+        segment_id,
+        translation=translation,
+        memory_match=memory_match,
+        edit_key=edit_key,
+        action_key=action_key,
+    )
+    _poll_operator_refinement_task(
+        segment_id,
+        edit_key=edit_key,
+        action_key=action_key,
+        fallback_text=translation.translated_text,
+    )
 
     with st.container(border=True):
         st.markdown(f"##### :material/edit_note: {_t('operator_refinement_title')}")
@@ -1082,6 +1203,8 @@ def _render_operator_phrase_refinement(
                     preferred=memory_match.preferred_text,
                 )
             )
+            if memory_auto_staged:
+                st.success(_t("operator_phrase_memory_auto_staged"))
 
         replace_col, phrase_col = st.columns(2)
         replace_col.text_area(
@@ -1137,7 +1260,12 @@ def _render_operator_phrase_refinement(
                 st.session_state.pop(result_key, None)
                 st.session_state.pop(error_key, None)
                 st.success(_t("operator_rewrite_queued"))
-                _poll_operator_refinement_task(segment_id, edit_key=edit_key, fallback_text=translation.translated_text)
+                _poll_operator_refinement_task(
+                    segment_id,
+                    edit_key=edit_key,
+                    action_key=action_key,
+                    fallback_text=translation.translated_text,
+                )
                 running_task = _operator_refinement_running(segment_id)
 
         error = st.session_state.get(error_key)
@@ -1159,7 +1287,12 @@ def _render_operator_phrase_refinement(
 
         result = st.session_state.get(result_key)
         if result:
-            _render_operator_refinement_result(result, edit_key=edit_key)
+            _render_operator_refinement_result(
+                result,
+                segment_id=segment_id,
+                edit_key=edit_key,
+                action_key=action_key,
+            )
 
 
 def _rewrite_translation_with_operator_phrase(
@@ -1289,8 +1422,19 @@ def _raw_issue_summary(issue: object) -> str:
     return f"{severity} - {issue_type}: {message}"
 
 
-def _render_operator_refinement_result(result: dict[str, object], *, edit_key: str) -> None:
-    mode_key = "operator_rewrite_mode_llm" if result.get("mode") == "llm" else "operator_rewrite_mode_local"
+def _render_operator_refinement_result(
+    result: dict[str, object],
+    *,
+    segment_id: str,
+    edit_key: str,
+    action_key: str,
+) -> None:
+    if result.get("mode") == "llm":
+        mode_key = "operator_rewrite_mode_llm"
+    elif result.get("mode") == "memory":
+        mode_key = "operator_rewrite_mode_memory"
+    else:
+        mode_key = "operator_rewrite_mode_local"
     mode_label = _t(mode_key)
     validation_issues = list(result.get("validation_issues") or [])
     review_result = result.get("review_result")
@@ -1301,10 +1445,7 @@ def _render_operator_refinement_result(result: dict[str, object], *, edit_key: s
     st.markdown(_t("operator_rewrite_result"))
     st.caption(_t("operator_rewrite_source", mode=mode_label))
     st.info(str(result.get("proposed_text") or ""))
-    if result.get("auto_applied_to_editor", False):
-        st.success(_t("operator_rewrite_applied"))
-    else:
-        st.warning(_t("operator_rewrite_not_auto_applied"))
+    if not result.get("auto_applied_to_editor", False):
         if st.button(
             _t("operator_rewrite_apply_result"),
             key=(
@@ -1313,9 +1454,23 @@ def _render_operator_refinement_result(result: dict[str, object], *, edit_key: s
             ),
             icon=":material/low_priority:",
         ):
-            st.session_state[edit_key] = str(result.get("proposed_text") or "")
-            result["auto_applied_to_editor"] = True
-            st.success(_t("operator_rewrite_applied"))
+            applied = _stage_operator_approved_text(
+                segment_id,
+                edit_key=edit_key,
+                action_key=action_key,
+                proposed_text=result.get("proposed_text"),
+                preferred_phrase=result.get("preferred_phrase"),
+                replace_phrase=result.get("replace_phrase"),
+                source=str(result.get("mode") or "rewrite"),
+                overwrite=True,
+            )
+            result["auto_applied_to_editor"] = applied
+    if result.get("auto_applied_to_editor", False):
+        st.success(_t("operator_rewrite_applied"))
+        st.caption(_t("operator_rewrite_result_active"))
+    else:
+        st.warning(_t("operator_rewrite_not_auto_applied"))
+        st.caption(_t("operator_rewrite_result_inactive"))
 
     if result.get("memory_saved"):
         st.caption(_t("operator_phrase_memory_saved"))
@@ -1344,11 +1499,16 @@ def _render_operator_refinement_result(result: dict[str, object], *, edit_key: s
             st.warning(_issue_label(finding))
 
 
-def _operator_refinement_note(segment_id: str) -> str | None:
-    result = st.session_state.get(_operator_refinement_result_key(segment_id))
-    if not result:
+def _operator_refinement_note(segment_id: str, *, approved_text: object) -> str | None:
+    applied = st.session_state.get(_operator_refinement_applied_key(segment_id))
+    if not isinstance(applied, dict):
         return None
-    phrase = str(result.get("preferred_phrase") or "").strip()
+
+    proposed_text = str(applied.get("proposed_text") or "")
+    if normalize_ws(proposed_text) != normalize_ws(str(approved_text or "")):
+        return None
+
+    phrase = str(applied.get("preferred_phrase") or "").strip()
     if not phrase:
         return None
     return _t("operator_refinement_note", phrase=phrase)
@@ -2453,7 +2613,14 @@ def _undo_operator_decisions(state: dict) -> dict:
 
 def _clear_operator_decision_widget_state(segment_ids: set[str]) -> None:
     for segment_id in segment_ids:
-        for prefix in ("review_action_v2", "action"):
+        for prefix in (
+            "review_action_v2",
+            "action",
+            "operator_refinement_result",
+            "operator_refinement_applied",
+            "operator_refinement_task",
+            "operator_refinement_error",
+        ):
             st.session_state.pop(f"{prefix}_{segment_id}", None)
 
 
@@ -2565,6 +2732,7 @@ def _render_human_review(state: dict) -> None:
         translation = translations[segment_id]
         issues = _segment_issues(state, segment_id)
         edit_key = f"edit_{segment_id}"
+        action_key = f"review_action_v2_{segment_id}"
         st.session_state.setdefault(edit_key, translation.translated_text)
 
         with st.expander(
@@ -2596,6 +2764,7 @@ def _render_human_review(state: dict) -> None:
                 translation,
                 config,
                 edit_key=edit_key,
+                action_key=action_key,
                 issues=issues,
             )
 
@@ -2609,6 +2778,12 @@ def _render_human_review(state: dict) -> None:
                 ),
             )
 
+            if (
+                normalize_ws(str(edited or "")) != normalize_ws(translation.translated_text)
+                and str(st.session_state.get(action_key, "skip") or "skip") != "keep_source"
+            ):
+                st.session_state[action_key] = "edit"
+
             action = st.segmented_control(
                 _t("decision"),
                 ["skip", "edit", "accept", "keep_source"],
@@ -2619,22 +2794,27 @@ def _render_human_review(state: dict) -> None:
                     "accept": _t("action_accept"),
                     "keep_source": _t("action_keep_source"),
                 }.get,
-                key=f"review_action_v2_{segment_id}",
+                key=action_key,
             )
+            pending_decision = build_selected_operator_decision(
+                action=action,
+                edited_text=edited,
+                original_text=translation.translated_text,
+                note=_operator_refinement_note(segment_id, approved_text=edited),
+            )
+            if pending_decision is None:
+                st.caption(_t("decision_state_skip"))
+            else:
+                pending_action = str(pending_decision.get("action") or "edit")
+                st.caption(_t(f"decision_state_{pending_action}"))
 
             if issues:
                 st.markdown(_t("issues"))
                 for issue in issues:
                     st.warning(_issue_label(issue))
 
-            decision = build_selected_operator_decision(
-                action=action,
-                edited_text=edited,
-                original_text=translation.translated_text,
-                note=_operator_refinement_note(segment_id),
-            )
-            if decision is not None:
-                decisions[segment_id] = decision
+            if pending_decision is not None:
+                decisions[segment_id] = pending_decision
 
     st.caption(_t("save_decisions_hint"))
     st.caption(_t("selected_decisions", count=len(decisions)))
