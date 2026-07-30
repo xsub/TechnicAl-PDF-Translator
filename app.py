@@ -53,7 +53,7 @@ MODE_LABELS = {
 
 UI_TEXT = {
     "pl": {
-        "page_title": "TechnicAl PDF Translator MVP",
+        "page_title": "TechnicAl. PDF Translator -- delta version",
         "page_caption": "PDF -> segmenty -> tłumaczenie -> walidacja -> review -> decyzje operatora -> PDF.",
         "configuration": "Konfiguracja",
         "openai_status": "OpenAI: {status}",
@@ -222,7 +222,7 @@ UI_TEXT = {
         "missing_anthropic_reviewer": "Brakuje `ANTHROPIC_API_KEY` w `.env`, a wybrano review Anthropic.",
     },
     "en": {
-        "page_title": "TechnicAl PDF Translator MVP",
+        "page_title": "TechnicAl. PDF Translator -- delta version",
         "page_caption": "PDF -> segments -> translation -> validation -> review -> operator decisions -> PDF.",
         "configuration": "Configuration",
         "openai_status": "OpenAI: {status}",
@@ -1695,7 +1695,7 @@ def _render_outputs(state: dict) -> None:
             )
 
 
-st.set_page_config(page_title="TechnicAl PDF Translator", layout="wide")
+st.set_page_config(page_title="TechnicAl. PDF Translator -- delta version", layout="wide")
 _init_session_state()
 
 openai_ready = _has_env_value("OPENAI_API_KEY")
@@ -1704,7 +1704,9 @@ loaded_state = st.session_state.get("translation_state")
 loaded_config = loaded_state.get("config") if isinstance(loaded_state, dict) else None
 
 with st.sidebar:
-    st.markdown(f"**TechnicAl** `v{_app_version()}`")
+    brand_col, version_col = st.columns([0.68, 0.32], vertical_alignment="center")
+    brand_col.markdown("**TechnicAl.**")
+    version_col.caption(f"`v{_app_version()}`", text_alignment="right")
     st.header(_t("configuration"))
     st.segmented_control(
         _t("ui_language"),
