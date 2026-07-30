@@ -142,6 +142,8 @@ class JobReport(BaseModel):
     source_pdf_path: str
     output_pdf_path: str | None
     report_path: str | None = None
+    source_language: str = "English"
+    target_language: str = "Polish"
     source_sha256: str | None = None
     output_sha256: str | None = None
     status: str

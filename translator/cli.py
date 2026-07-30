@@ -15,6 +15,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Translate a technical PDF with audited MVP workflow.")
     parser.add_argument("pdf", help="Path to source PDF")
     parser.add_argument("--output-dir", default="storage/output")
+    parser.add_argument("--source-language", default="English")
+    parser.add_argument("--target-language", default="Polish")
     parser.add_argument("--mode", choices=["standard", "high_assurance", "strict_regulatory"], default="standard")
     parser.add_argument("--translator", choices=["mock", "openai"], default="mock")
     parser.add_argument("--reviewer", choices=["mock", "anthropic", "openai"], default="mock")
@@ -25,6 +27,8 @@ def main() -> None:
     config = JobConfig(
         source_pdf_path=str(Path(args.pdf)),
         output_dir=args.output_dir,
+        source_language=args.source_language,
+        target_language=args.target_language,
         mode=args.mode,
         translator_provider=args.translator,
         reviewer_provider=args.reviewer,

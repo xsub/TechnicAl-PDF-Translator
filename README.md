@@ -1,6 +1,6 @@
 # Technical PDF Translator MVP
 
-To jest minimalny, audytowalny workflow do tłumaczenia technicznych PDF-ów z angielskiego na polski. Projekt jest celowo bardziej „pipeline” niż autonomiczny agent: LLM tłumaczy znaczenie, kod pilnuje liczb/jednostek/odnośników, drugi model pełni rolę recenzenta, a operator zatwierdza tylko sporne fragmenty.
+To jest minimalny, audytowalny workflow do tłumaczenia technicznych PDF-ów między wybranymi językami. Domyślny kierunek to English → Polish, ale UI pozwala wybrać dowolny język źródłowy i docelowy z długiej przeszukiwalnej listy albo wpisać własny. Projekt jest celowo bardziej „pipeline” niż autonomiczny agent: LLM tłumaczy znaczenie, kod pilnuje liczb/jednostek/odnośników, drugi model pełni rolę recenzenta, a operator zatwierdza tylko sporne fragmenty.
 
 ## Podgląd aplikacji
 
@@ -15,6 +15,8 @@ Panel pokazuje checkpoint joba, debug/status bieżącego segmentu oraz podgląd 
 - glossary domenowy w `translator/domain/glossary.yaml`,
 - ochronę liczb, jednostek, operatorów, CAS, norm i skrótów laboratoryjnych,
 - tłumacza i recenzenta w trybie `mock`, żeby demo działało bez kluczy API,
+- wybór języka UI: PL/EN,
+- wybór języka tłumaczenia z/do z przeszukiwalnej listy i możliwością wpisania własnego języka,
 - adapter OpenAI dla tłumaczenia i adapter Anthropic/OpenAI dla review,
 - prosty workflow z opcjonalnym LangGraph,
 - Streamlit UI z ekranem problemów i decyzji operatora,
@@ -39,7 +41,10 @@ streamlit run app.py
 Uruchomienie z CLI w trybie demo/mock:
 
 ```bash
-technical-pdf-translator path/to/input.pdf --auto-accept-unresolved
+technical-pdf-translator path/to/input.pdf \
+  --source-language English \
+  --target-language Polish \
+  --auto-accept-unresolved
 ```
 
 W trybie realnych modeli ustaw:
@@ -97,7 +102,9 @@ ANTHROPIC_REVIEW_MODEL=claude-sonnet-4-5
 
 ## Założenia MVP
 
-MVP generuje nowy PDF zachowujący strukturę dokumentu, ale nie próbuje odtworzyć oryginalnego layoutu piksel po pikselu. To świadoma decyzja: polskie tłumaczenia są zwykle dłuższe, więc identyczny layout i brak skracania tekstu są w praktyce sprzecznymi wymaganiami.
+MVP generuje nowy PDF zachowujący strukturę dokumentu, ale nie próbuje odtworzyć oryginalnego layoutu piksel po pikselu. To świadoma decyzja: tłumaczenia bywają dłuższe lub krótsze od oryginału, więc identyczny layout i brak skracania tekstu są w praktyce sprzecznymi wymaganiami.
+
+Glossary domenowy jest obecnie polski. Gdy język docelowy to Polish/Polski/pl, zatwierdzone polskie terminy są walidowane jako wymagane. Przy innych językach glossary służy jako kotwica znaczeniowa dla modelu, ale walidator nie wymusza polskich odpowiedników.
 
 OCR, idealna rekonstrukcja układu, RAG i dwa pełne niezależne tłumaczenia są poza pierwszym MVP.
 

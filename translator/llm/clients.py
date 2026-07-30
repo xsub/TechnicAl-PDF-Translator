@@ -421,7 +421,7 @@ def _segment_payload(segment: DocumentSegment, glossary: DomainGlossary, config:
         "domain": config.domain,
         "mode": config.mode,
         "segment": segment.model_dump(mode="json"),
-        "glossary": glossary.terms_for_prompt(),
+        "glossary": glossary.terms_for_prompt(config.target_language),
     }
 
 

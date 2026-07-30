@@ -194,6 +194,7 @@ def _initial_state(config: JobConfig) -> TranslationState:
         "job_id": job_id,
         "config": config,
         "source_pdf_path": config.source_pdf_path,
+        "source_language": config.source_language,
         "target_language": config.target_language,
         "document_metadata": {},
         "segments": [],

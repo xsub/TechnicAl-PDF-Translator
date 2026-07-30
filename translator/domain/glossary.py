@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from translator.languages import is_polish_language
 from translator.schemas import ValidationIssue
 
 
@@ -23,7 +24,7 @@ class GlossaryTerm(BaseModel):
 class DomainGlossary(BaseModel):
     terms: list[GlossaryTerm] = Field(default_factory=list)
 
-    def terms_for_prompt(self) -> str:
+    def terms_for_prompt(self, target_language: str = "Polish") -> str:
         lines = []
         for term in self.terms:
             extras = []
@@ -34,7 +35,13 @@ class DomainGlossary(BaseModel):
             if term.retain_english or term.retain_english_on_first_use:
                 extras.append("retain English when useful")
             suffix = f" ({'; '.join(extras)})" if extras else ""
-            lines.append(f"- {term.source} -> {term.preferred_pl}{suffix}")
+            if is_polish_language(target_language):
+                lines.append(f"- {term.source} -> {term.preferred_pl}{suffix}")
+            else:
+                lines.append(
+                    f"- source term: {term.source}; approved Polish equivalent: {term.preferred_pl}; "
+                    f"use as a domain concept anchor only for target language '{target_language}'{suffix}"
+                )
         return "\n".join(lines)
 
     def relevant_terms(self, source_text: str) -> list[GlossaryTerm]:
@@ -55,7 +62,16 @@ class DomainGlossary(BaseModel):
             )
         return result
 
-    def validate_translation(self, segment_id: str, source_text: str, translated_text: str) -> list[ValidationIssue]:
+    def validate_translation(
+        self,
+        segment_id: str,
+        source_text: str,
+        translated_text: str,
+        target_language: str = "Polish",
+    ) -> list[ValidationIssue]:
+        if not is_polish_language(target_language):
+            return []
+
         issues: list[ValidationIssue] = []
         translated_lower = translated_text.lower()
         for term in self.relevant_terms(source_text):
@@ -179,4 +195,3 @@ def _parse_scalar(value: str) -> str | bool:
     if value.lower() == "false":
         return False
     return value.strip('"').strip("'")
-

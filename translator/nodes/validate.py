@@ -54,7 +54,14 @@ def validate_invariants(
                 segment_id=segment.segment_id,
             )
         issues.extend(validate_segment_invariants(segment, translation))
-        issues.extend(glossary.validate_translation(segment.segment_id, segment.source_text, translation.translated_text))
+        issues.extend(
+            glossary.validate_translation(
+                segment.segment_id,
+                segment.source_text,
+                translation.translated_text,
+                config.target_language,
+            )
+        )
 
     log_debug(
         "segments.validate.done",

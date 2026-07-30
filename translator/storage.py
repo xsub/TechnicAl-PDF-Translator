@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -36,26 +37,27 @@ class JobStore:
             payload_chars=len(payload),
             db_path=str(self.db_path),
         )
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs(job_id, status, source_pdf_path, output_pdf_path, payload_json, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                    status=excluded.status,
-                    output_pdf_path=excluded.output_pdf_path,
-                    payload_json=excluded.payload_json,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    state["job_id"],
-                    state.get("status", "unknown"),
-                    state.get("source_pdf_path"),
-                    state.get("output_pdf_path"),
-                    payload,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO jobs(job_id, status, source_pdf_path, output_pdf_path, payload_json, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                        status=excluded.status,
+                        output_pdf_path=excluded.output_pdf_path,
+                        payload_json=excluded.payload_json,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        state["job_id"],
+                        state.get("status", "unknown"),
+                        state.get("source_pdf_path"),
+                        state.get("output_pdf_path"),
+                        payload,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
         log_debug(
             "storage.save_state.done",
             job_id=state["job_id"],
@@ -65,7 +67,7 @@ class JobStore:
 
     def load_state(self, job_id: str) -> TranslationState | None:
         log_debug("storage.load_state.start", job_id=job_id, db_path=str(self.db_path))
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT payload_json FROM jobs WHERE job_id = ?",
                 (job_id,),
@@ -87,7 +89,7 @@ class JobStore:
 
     def load_latest_state(self) -> TranslationState | None:
         log_debug("storage.load_latest_state.start", db_path=str(self.db_path))
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 """
                 SELECT payload_json
@@ -122,19 +124,20 @@ class JobStore:
         return report_path
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    job_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    source_pdf_path TEXT NOT NULL,
-                    output_pdf_path TEXT,
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        job_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        source_pdf_path TEXT NOT NULL,
+                        output_pdf_path TEXT,
+                        payload_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
 
 
 def _state_from_payload(payload_json: str) -> TranslationState:
@@ -196,6 +199,8 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         source_pdf_path=state["source_pdf_path"],
         output_pdf_path=output_pdf_path,
         report_path=str(report_path) if report_path else None,
+        source_language=state["config"].source_language,
+        target_language=state["config"].target_language,
         source_sha256=sha256_file(state["source_pdf_path"]),
         output_sha256=sha256_file(output_pdf_path) if output_pdf_path else None,
         status=state.get("status", "unknown"),

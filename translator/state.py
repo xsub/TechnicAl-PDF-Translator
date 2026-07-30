@@ -17,6 +17,7 @@ class TranslationState(TypedDict, total=False):
     job_id: str
     config: JobConfig
     source_pdf_path: str
+    source_language: str
     target_language: str
     document_metadata: dict[str, Any]
     segments: list[DocumentSegment]
@@ -31,4 +32,3 @@ class TranslationState(TypedDict, total=False):
     output_verification: OutputVerification | None
     report_path: str | None
     status: str
-
