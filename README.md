@@ -2,6 +2,12 @@
 
 To jest minimalny, audytowalny workflow do tłumaczenia technicznych PDF-ów z angielskiego na polski. Projekt jest celowo bardziej „pipeline” niż autonomiczny agent: LLM tłumaczy znaczenie, kod pilnuje liczb/jednostek/odnośników, drugi model pełni rolę recenzenta, a operator zatwierdza tylko sporne fragmenty.
 
+## Podgląd aplikacji
+
+![Podgląd na żywo tłumaczenia w Streamlit](docs/assets/live-translation-preview.png)
+
+Panel pokazuje checkpoint joba, debug/status bieżącego segmentu oraz podgląd na żywo tłumaczeń zapisanych lokalnie w SQLite.
+
 ## Co zawiera MVP
 
 - ekstrakcję cyfrowych PDF-ów bez OCR,
@@ -116,4 +122,3 @@ python -m unittest
 ```
 
 Testy używają tylko lokalnych zależności PDF/Pydantic i nie wymagają kluczy API.
-# TechnicAl-PDF-Translator
