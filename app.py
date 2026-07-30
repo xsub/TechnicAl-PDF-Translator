@@ -761,7 +761,8 @@ def _safe_int(value: object) -> int:
 
 
 def _config_int(config: object, name: str, default: int) -> int:
-    value = _safe_int(getattr(config, name, default))
+    raw_value = config.get(name, default) if isinstance(config, dict) else getattr(config, name, default)
+    value = _safe_int(raw_value)
     return value if value > 0 else default
 
 
@@ -779,9 +780,21 @@ def _current_parallelism(fallback_config: object | None = None) -> tuple[int, in
     )
 
 
-def _with_current_parallelism(config: JobConfig | dict) -> JobConfig:
-    if not isinstance(config, JobConfig):
-        config = JobConfig.model_validate(config)
+def _coerce_job_config(config: JobConfig | dict | object) -> JobConfig:
+    if isinstance(config, JobConfig):
+        return config
+    if isinstance(config, dict):
+        return JobConfig.model_validate(config)
+
+    model_dump = getattr(config, "model_dump", None)
+    if callable(model_dump):
+        return JobConfig.model_validate(model_dump())
+
+    return JobConfig.model_validate(vars(config))
+
+
+def _with_current_parallelism(config: JobConfig | dict | object) -> JobConfig:
+    config = _coerce_job_config(config)
 
     translation_concurrency, review_concurrency = _current_parallelism(config)
     return config.model_copy(
