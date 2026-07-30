@@ -4,7 +4,7 @@ import time
 
 from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
-from translator.llm.clients import build_reviewer
+from translator.llm.clients import build_reviewer, estimate_review_request_tokens
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
 from translator.state import TranslationState
 
@@ -48,17 +48,23 @@ def review_translation(
             source_preview=text_preview(segment.source_text),
             translation_preview=text_preview(translation.translated_text),
         )
+        llm_inflight = None
+        if config.reviewer_provider != "mock":
+            llm_inflight = {
+                "operation": "review",
+                "provider": config.reviewer_provider,
+                "model": getattr(client, "model_name", config.reviewer_provider),
+                "segment_id": segment.segment_id,
+                "index": index,
+                "total": total,
+                "estimated_input_tokens": estimate_review_request_tokens(segment, translation, glossary, config),
+            }
         if checkpoint_callback:
             checkpoint_callback(
                 {
                     **state,
                     "review_results": review_results,
-                    "llm_inflight": {
-                        "operation": "review",
-                        "segment_id": segment.segment_id,
-                        "index": index,
-                        "total": total,
-                    },
+                    "llm_inflight": llm_inflight,
                     "status": f"reviewing {index}/{total}",
                 }
             )

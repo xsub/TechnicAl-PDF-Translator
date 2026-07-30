@@ -3,8 +3,9 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from translator.llm.clients import _extract_token_usage
-from translator.schemas import DocumentSegment, TokenUsage, TranslationResult
+from translator.domain.glossary import DomainGlossary
+from translator.llm.clients import _extract_token_usage, estimate_translation_request_tokens
+from translator.schemas import DocumentSegment, JobConfig, TokenUsage, TranslationResult
 from translator.translation_cache import copy_translation_from_cache
 
 
@@ -49,6 +50,24 @@ class TokenUsageTests(unittest.TestCase):
         self.assertEqual(usage.output_tokens, 12)
         self.assertEqual(usage.total_tokens, 52)
 
+    def test_extracts_token_usage_from_dict_raw_message(self) -> None:
+        raw = {
+            "response_metadata": {
+                "usage": {
+                    "prompt_tokens": 75,
+                    "completion_tokens": 25,
+                }
+            }
+        }
+
+        usage = _extract_token_usage(raw, provider="openai", model="gpt-test", operation="translate")
+
+        self.assertIsNotNone(usage)
+        assert usage is not None
+        self.assertEqual(usage.input_tokens, 75)
+        self.assertEqual(usage.output_tokens, 25)
+        self.assertEqual(usage.total_tokens, 100)
+
     def test_extracts_anthropic_usage_metadata(self) -> None:
         raw = SimpleNamespace(
             usage_metadata={
@@ -91,6 +110,20 @@ class TokenUsageTests(unittest.TestCase):
 
         self.assertEqual(copied.segment_id, "s2")
         self.assertIsNone(copied.token_usage)
+
+    def test_estimates_translation_request_tokens(self) -> None:
+        segment = DocumentSegment(
+            segment_id="s1",
+            page_number=1,
+            order_index=1,
+            block_type="paragraph",
+            source_text="Overall migration was below 10 mg/dm2.",
+        )
+        config = JobConfig(source_pdf_path="dummy.pdf", translator_provider="openai")
+
+        estimated_tokens = estimate_translation_request_tokens(segment, DomainGlossary(), config)
+
+        self.assertGreater(estimated_tokens, 0)
 
 
 if __name__ == "__main__":

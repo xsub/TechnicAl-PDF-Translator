@@ -305,6 +305,45 @@ def build_reviewer(config: JobConfig) -> ReviewerClient:
     return MockTechnicalReviewer()
 
 
+def estimate_translation_request_tokens(
+    segment: DocumentSegment,
+    glossary: DomainGlossary,
+    config: JobConfig,
+) -> int:
+    return _estimate_structured_request_tokens(
+        _read_prompt("translator.txt"),
+        _segment_payload(segment, glossary, config),
+        TranslationResult,
+    )
+
+
+def estimate_revision_request_tokens(
+    segment: DocumentSegment,
+    current: TranslationResult,
+    findings: list[ReviewFinding],
+    glossary: DomainGlossary,
+    config: JobConfig,
+) -> int:
+    payload = _segment_payload(segment, glossary, config)
+    payload["current_translation"] = current.model_dump(mode="json")
+    payload["review_findings"] = [finding.model_dump(mode="json") for finding in findings]
+    payload["instruction"] = "Revise only the material issues. Preserve protected tokens."
+    return _estimate_structured_request_tokens(_read_prompt("translator.txt"), payload, TranslationResult)
+
+
+def estimate_review_request_tokens(
+    segment: DocumentSegment,
+    translation: TranslationResult,
+    glossary: DomainGlossary,
+    config: JobConfig,
+) -> int:
+    return _estimate_structured_request_tokens(
+        _read_prompt("reviewer.txt"),
+        _review_payload(segment, translation, glossary, config),
+        ReviewResult,
+    )
+
+
 def _invoke_openai_structured(
     model_name: str,
     system_prompt: str,
@@ -461,14 +500,16 @@ def _extract_token_usage(
     if raw_message is None:
         return None
 
+    usage_metadata = _metadata_value(raw_message, "usage_metadata")
+    response_metadata = _metadata_value(raw_message, "response_metadata")
+    response_metadata = response_metadata if isinstance(response_metadata, dict) else {}
+
     usage_candidates = [
-        getattr(raw_message, "usage_metadata", None),
-        (getattr(raw_message, "response_metadata", None) or {}).get("token_usage")
-        if isinstance(getattr(raw_message, "response_metadata", None), dict)
-        else None,
-        (getattr(raw_message, "response_metadata", None) or {}).get("usage")
-        if isinstance(getattr(raw_message, "response_metadata", None), dict)
-        else None,
+        usage_metadata,
+        _metadata_value(raw_message, "token_usage"),
+        _metadata_value(raw_message, "usage"),
+        response_metadata.get("token_usage"),
+        response_metadata.get("usage"),
     ]
 
     for usage in usage_candidates:
@@ -501,6 +542,12 @@ def _extract_token_usage(
         usage_metadata=getattr(raw_message, "usage_metadata", None),
     )
     return None
+
+
+def _metadata_value(raw_message: Any, key: str) -> Any:
+    if isinstance(raw_message, dict):
+        return raw_message.get(key)
+    return getattr(raw_message, key, None)
 
 
 def _usage_int(usage: dict, *keys: str) -> int:
@@ -594,3 +641,21 @@ def _result_summary(result: object) -> dict:
             "finding_severities": [finding.severity for finding in result.findings],
         }
     return {"type": type(result).__name__}
+
+
+def _estimate_structured_request_tokens(system_prompt: str, payload: dict, schema: type) -> int:
+    schema_text = ""
+    if hasattr(schema, "model_json_schema"):
+        schema_text = json.dumps(schema.model_json_schema(), ensure_ascii=False, default=str)
+    payload_text = json.dumps(payload, ensure_ascii=False, default=str)
+    request_text = "\n\n".join([system_prompt, payload_text, schema_text])
+    return _estimate_text_tokens(request_text)
+
+
+def _estimate_text_tokens(text: str) -> int:
+    try:
+        import tiktoken  # type: ignore
+
+        return len(tiktoken.get_encoding("cl100k_base").encode(text))
+    except Exception:  # pragma: no cover - dependency fallback
+        return max(1, len(text) // 4)

@@ -99,7 +99,11 @@ UI_TEXT = {
         "output_tokens_metric": "Output tokens",
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokeny pojawią się po zakończeniu pierwszego realnego requestu LLM. Cache i mock nie doliczają tokenów.",
-        "llm_inflight": "Request LLM w toku: `{operation}` dla segmentu `{segment_id}`. Tokeny zaktualizują się po odpowiedzi providera.",
+        "llm_inflight": "Request LLM w toku: `{operation}` dla segmentu `{segment_id}` (`{provider}` `{model}`). Tokeny zaktualizują się po odpowiedzi providera.",
+        "llm_request_inflight_delta": "+1 w toku",
+        "estimated_input_delta": "+~{tokens} input w toku",
+        "estimated_total_delta": "+~{tokens} szac. w toku",
+        "estimated_token_note": "Wartość w toku jest lokalnym szacunkiem input promptu. Finalne input/output/total po odpowiedzi podaje provider.",
         "progress_stage": "Etap",
         "progress_segment": "segment",
         "progress_stage_progress": "postęp etapu",
@@ -219,7 +223,11 @@ UI_TEXT = {
         "output_tokens_metric": "Output tokens",
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokens will appear after the first real LLM request finishes. Cache and mock do not add tokens.",
-        "llm_inflight": "LLM request in progress: `{operation}` for segment `{segment_id}`. Token usage will update after the provider responds.",
+        "llm_inflight": "LLM request in progress: `{operation}` for segment `{segment_id}` (`{provider}` `{model}`). Token usage will update after the provider responds.",
+        "llm_request_inflight_delta": "+1 in flight",
+        "estimated_input_delta": "+~{tokens} input in flight",
+        "estimated_total_delta": "+~{tokens} est. in flight",
+        "estimated_token_note": "The in-flight value is a local input-prompt estimate. Final input/output/total comes from the provider response.",
         "progress_stage": "Stage",
         "progress_segment": "segment",
         "progress_stage_progress": "stage progress",
@@ -506,23 +514,68 @@ def _token_usage_summary(state: dict) -> dict[str, int]:
 
 def _render_token_usage_metrics(state: dict) -> None:
     usage = _token_usage_summary(state)
+    inflight = state.get("llm_inflight")
+    inflight = inflight if isinstance(inflight, dict) else None
+    estimated_input_tokens = _safe_int(inflight.get("estimated_input_tokens")) if inflight else 0
+    request_delta = _t("llm_request_inflight_delta") if inflight else None
+    input_delta = (
+        _t("estimated_input_delta", tokens=f"{estimated_input_tokens:,}")
+        if estimated_input_tokens
+        else None
+    )
+    total_delta = (
+        _t("estimated_total_delta", tokens=f"{estimated_input_tokens:,}")
+        if estimated_input_tokens
+        else None
+    )
+
     st.markdown(f"##### {_t('token_usage_header')}")
     cols = st.columns(4)
-    cols[0].metric(_t("llm_requests_metric"), f"{usage['requests']:,}")
-    cols[1].metric(_t("input_tokens_metric"), f"{usage['input_tokens']:,}")
+    cols[0].metric(
+        _t("llm_requests_metric"),
+        f"{usage['requests']:,}",
+        delta=request_delta,
+        delta_color="off",
+    )
+    cols[1].metric(
+        _t("input_tokens_metric"),
+        f"{usage['input_tokens']:,}",
+        delta=input_delta,
+        delta_color="off",
+    )
     cols[2].metric(_t("output_tokens_metric"), f"{usage['output_tokens']:,}")
-    cols[3].metric(_t("total_tokens_metric"), f"{usage['total_tokens']:,}")
-    inflight = state.get("llm_inflight")
-    if isinstance(inflight, dict):
+    cols[3].metric(
+        _t("total_tokens_metric"),
+        f"{usage['total_tokens']:,}",
+        delta=total_delta,
+        delta_color="off",
+    )
+    if inflight:
         st.caption(
             _t(
                 "llm_inflight",
                 operation=inflight.get("operation", "llm"),
+                provider=inflight.get("provider", "-"),
+                model=inflight.get("model", "-"),
                 segment_id=inflight.get("segment_id", "-"),
             )
         )
-    if usage["requests"] == 0:
+        if estimated_input_tokens:
+            st.caption(_t("estimated_token_note"))
+    elif usage["requests"] == 0:
         st.caption(_t("no_token_usage_yet"))
+
+
+def _safe_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
 
 
 def _status_update(status, *, label: str, state: str | None = None) -> None:

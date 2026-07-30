@@ -4,7 +4,11 @@ import time
 
 from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
-from translator.llm.clients import build_translator
+from translator.llm.clients import (
+    build_translator,
+    estimate_revision_request_tokens,
+    estimate_translation_request_tokens,
+)
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
 from translator.schemas import DocumentSegment, ReviewFinding, TranslationResult
 from translator.state import TranslationState
@@ -135,6 +139,17 @@ def translate_segments(
 
         if client is None:
             client = build_translator(config)
+        llm_inflight = None
+        if config.translator_provider != "mock":
+            llm_inflight = {
+                "operation": "translate",
+                "provider": config.translator_provider,
+                "model": getattr(client, "model_name", config.translator_provider),
+                "segment_id": segment.segment_id,
+                "index": index,
+                "total": total,
+                "estimated_input_tokens": estimate_translation_request_tokens(segment, glossary, config),
+            }
         if checkpoint_callback:
             checkpoint_callback(
                 {
@@ -144,12 +159,7 @@ def translate_segments(
                     "persistent_translation_cache_hits": persistent_cache_hits,
                     "translation_memory_misses": memory_misses,
                     "translation_cache_scope": cache_scope,
-                    "llm_inflight": {
-                        "operation": "translate",
-                        "segment_id": segment.segment_id,
-                        "index": index,
-                        "total": total,
-                    },
+                    "llm_inflight": llm_inflight,
                     "status": f"translating {index}/{total}",
                 }
             )
@@ -238,18 +248,24 @@ def revise_flagged_segments(
             findings=len(findings),
             current_preview=text_preview(current.translated_text),
         )
+        llm_inflight = None
+        if config.translator_provider != "mock":
+            llm_inflight = {
+                "operation": "revise",
+                "provider": config.translator_provider,
+                "model": getattr(client, "model_name", config.translator_provider),
+                "segment_id": segment_id,
+                "index": index,
+                "total": total,
+                "estimated_input_tokens": estimate_revision_request_tokens(segment, current, findings, glossary, config),
+            }
         if checkpoint_callback:
             checkpoint_callback(
                 {
                     **state,
                     "translations": translations,
                     "revision_attempts": attempts,
-                    "llm_inflight": {
-                        "operation": "revise",
-                        "segment_id": segment_id,
-                        "index": index,
-                        "total": total,
-                    },
+                    "llm_inflight": llm_inflight,
                     "status": f"revising {index}/{total}",
                 }
             )
