@@ -1906,6 +1906,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     version_col.caption(f"`v{_app_version()}`", text_alignment="right")
+    st.caption("Cross-language technical document translation agent.")
     st.header(_t("configuration"))
     st.segmented_control(
         _t("ui_language"),
