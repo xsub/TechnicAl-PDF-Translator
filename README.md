@@ -1,24 +1,29 @@
-# TechnicAl PDF Translator
+# TechnicAl. PDF Translator -- delta version
 
 <p align="center">
   <img src="docs/assets/puffy-clouds-logo-150.png" alt="Puffy Clouds" width="150">
 </p>
 
-[![Tests](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml/badge.svg)](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml)
+[![Pytest](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-ff4b4b)
+![PDF](https://img.shields.io/badge/output-PDF-green)
 
-Cross-language tech PDF translator for audited, human-in-the-loop translation of technical documents.
+Cross-language technical PDF translator for audited, human-in-the-loop translation of technical documents.
 
-TechnicAl is a minimal document workflow for translating technical PDFs between arbitrary source and target languages. The default setup is English → Polish, but the UI supports a long searchable language list and custom language names. The project is intentionally more of a controlled pipeline than a fully autonomous agent: the LLM translates meaning, deterministic code protects numbers and identifiers, a second model reviews the output, and the operator resolves only the fragments that need human judgment.
+TechnicAl is a controlled document workflow for translating technical PDFs between arbitrary source and target languages. The default setup is English → Polish, but the UI supports a long searchable language list and custom language names.
+
+The project is intentionally more pipeline than autonomous agent: the LLM translates meaning, deterministic code protects numbers and identifiers, a second model reviews the output, and the operator resolves only the fragments that need human judgment.
 
 #AI #PDF #TechnicalTranslation #Streamlit #LangGraph #OpenAI #Anthropic #HumanInTheLoop #TranslationMemory #DocumentAutomation
 
 ## App preview
 
-![Live translation preview in Streamlit](docs/assets/live-translation-preview.png)
+![TechnicAl Streamlit app preview](docs/assets/technical-delta-preview.png)
 
-The UI shows the current job checkpoint, debug/status feedback for the active segment, and a live preview of translations already saved to SQLite.
+The UI shows language selection, model providers, parallelism controls, checkpoint recovery, live translation/review progress, token usage, and the final PDF action flow.
 
-## MVP features
+## Features
 
 - digital PDF extraction without OCR,
 - segmentation of paragraphs and simple tables,
@@ -29,11 +34,14 @@ The UI shows the current job checkpoint, debug/status feedback for the active se
 - mock translator/reviewer mode for demos without API keys,
 - OpenAI adapter for real translation,
 - Anthropic or OpenAI adapter for independent review,
+- asynchronous translation → review pipeline,
+- configurable parallelism for translation and review requests,
 - exact-match translation memory within the current job/checkpoint,
 - persistent SQLite translation cache across jobs and app restarts,
 - optional LangGraph workflow structure,
 - Streamlit UI for progress, live translation preview, issues and operator decisions,
 - live LLM token usage counters for translation/review requests,
+- visible PDF readiness/progress state,
 - output PDF generation with ReportLab,
 - output PDF verification by extracting the generated PDF text again,
 - JSON audit report and minimal SQLite job storage.
@@ -102,13 +110,13 @@ podman build --format docker -t technical-pdf-translator .
 
 ## GitHub CI
 
-This repository includes GitHub Actions testing in `.github/workflows/tests.yml`.
+This repository includes GitHub Actions testing in `.github/workflows/tests.yml`. The badge at the top of this README points to that workflow and is GitHub-ready for the public repository page.
 
 The CI workflow runs on pushes to `main` and pull requests:
 
 ```bash
 python -m compileall app.py translator tests
-python -m unittest
+python -m pytest -q
 ```
 
 The tests use only local PDF/Pydantic dependencies and do not require API keys.
@@ -132,7 +140,7 @@ Cache keys include the normalized source segment, source language, target langua
 
 Token usage is tracked from provider response metadata after each real LLM request completes. Cached translations and mock mode do not add token usage to the current job counters.
 
-Out of scope for the first MVP:
+Still out of scope for the current delta version:
 
 - full OCR pipeline,
 - pixel-perfect layout reconstruction,
@@ -145,7 +153,7 @@ Out of scope for the first MVP:
 ```text
 translator/
   graph.py                  # optional LangGraph compilation
-  workflow.py               # main MVP runner
+  workflow.py               # main workflow runner
   schemas.py                # Pydantic schemas: segments, translations, reviews, reports
   nodes/                    # workflow steps
   pdf/                      # parser, renderer, output validator
@@ -157,5 +165,5 @@ translator/
 ## Tests
 
 ```bash
-python -m unittest
+python -m pytest -q
 ```

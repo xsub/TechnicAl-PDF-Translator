@@ -1,4 +1,4 @@
-name: Tests
+name: Pytest
 
 on:
   push:
@@ -32,5 +32,5 @@ jobs:
       - name: Compile Python files
         run: python -m compileall app.py translator tests
 
-      - name: Run tests
-        run: python -m unittest
+      - name: Run pytest
+        run: python -m pytest -q
