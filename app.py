@@ -95,6 +95,12 @@ UI_TEXT = {
         "parallelism_status": "parallel",
         "source_to_target": "języki",
         "pipeline_progress_caption": "Postęp pipeline: tłumaczenia `{translations}/{segments}`, review `{reviews}/{segments}`.",
+        "parallelism_change_pending": (
+            "Suwaki UI ustawione na `{ui_translation}/{ui_review}`, ale aktualny checkpoint joba ma "
+            "`{job_translation}/{job_review}`. Zmiana zadziała przy następnym wznowieniu albo nowym jobie; "
+            "już uruchomionych requestów nie da się rozszerzyć w locie."
+        ),
+        "resume_parallelism_applied": "Wznowienie używa równoległości z UI: tłumaczenie `{translation}`, review `{review}`.",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segmenty",
         "validation_metric": "Walidacja",
@@ -241,6 +247,12 @@ UI_TEXT = {
         "parallelism_status": "parallel",
         "source_to_target": "languages",
         "pipeline_progress_caption": "Pipeline progress: translations `{translations}/{segments}`, review `{reviews}/{segments}`.",
+        "parallelism_change_pending": (
+            "The UI sliders are set to `{ui_translation}/{ui_review}`, but this job checkpoint has "
+            "`{job_translation}/{job_review}`. The change applies on the next resume or new job; "
+            "already running requests cannot be expanded in flight."
+        ),
+        "resume_parallelism_applied": "Resume uses UI parallelism: translation `{translation}`, review `{review}`.",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segments",
         "validation_metric": "Validation",
@@ -719,6 +731,33 @@ def _config_int(config: object, name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _session_concurrency(name: str, fallback: int) -> int:
+    value = _safe_int(st.session_state.get(name))
+    return value if value > 0 else fallback
+
+
+def _current_parallelism(fallback_config: object | None = None) -> tuple[int, int]:
+    translation_fallback = _config_int(fallback_config, "translation_concurrency", 4) if fallback_config else 4
+    review_fallback = _config_int(fallback_config, "review_concurrency", 4) if fallback_config else 4
+    return (
+        _session_concurrency("translation_concurrency", translation_fallback),
+        _session_concurrency("review_concurrency", review_fallback),
+    )
+
+
+def _with_current_parallelism(config: JobConfig | dict) -> JobConfig:
+    if not isinstance(config, JobConfig):
+        config = JobConfig.model_validate(config)
+
+    translation_concurrency, review_concurrency = _current_parallelism(config)
+    return config.model_copy(
+        update={
+            "translation_concurrency": translation_concurrency,
+            "review_concurrency": review_concurrency,
+        }
+    )
+
+
 def _inflight_segments_label(inflight: dict) -> str:
     segments = inflight.get("segments")
     if not isinstance(segments, list) or not segments:
@@ -1004,6 +1043,23 @@ def _render_status(state: dict) -> None:
 
     st.subheader(_t("status"))
     st.write(f"`{state.get('status', 'unknown')}`{provider_note}")
+    if config:
+        ui_translation_concurrency, ui_review_concurrency = _current_parallelism(config)
+        job_translation_concurrency = _config_int(config, "translation_concurrency", 4)
+        job_review_concurrency = _config_int(config, "review_concurrency", 4)
+        if (
+            ui_translation_concurrency != job_translation_concurrency
+            or ui_review_concurrency != job_review_concurrency
+        ):
+            st.caption(
+                _t(
+                    "parallelism_change_pending",
+                    ui_translation=ui_translation_concurrency,
+                    ui_review=ui_review_concurrency,
+                    job_translation=job_translation_concurrency,
+                    job_review=job_review_concurrency,
+                )
+            )
     st.caption(
         _t(
             "pipeline_progress_caption",
@@ -1145,6 +1201,9 @@ def _resume_translation(state: dict) -> None:
         st.session_state["last_error"] = _t("empty_checkpoint")
         return
 
+    config = _with_current_parallelism(config)
+    state = {**state, "config": config}
+
     source_path = Path(state.get("source_pdf_path", ""))
     if not source_path.exists():
         st.session_state["last_error"] = _t("resume_missing_source", path=source_path)
@@ -1156,6 +1215,13 @@ def _resume_translation(state: dict) -> None:
         return
 
     status = st.status(_t("resume_status"), expanded=True)
+    status.caption(
+        _t(
+            "resume_parallelism_applied",
+            translation=config.translation_concurrency,
+            review=config.review_concurrency,
+        )
+    )
     progress_bar = status.progress(0, text=_t("resume_progress"))
     detail_slot = status.empty()
     history_slot = status.container(height=180, border=True)
@@ -1441,6 +1507,8 @@ _init_session_state()
 
 openai_ready = _has_env_value("OPENAI_API_KEY")
 anthropic_ready = _has_env_value("ANTHROPIC_API_KEY")
+loaded_state = st.session_state.get("translation_state")
+loaded_config = loaded_state.get("config") if isinstance(loaded_state, dict) else None
 
 with st.sidebar:
     st.markdown(f"**TechnicAl** `v{_app_version()}`")
@@ -1524,7 +1592,10 @@ with st.sidebar:
         _t("translation_concurrency"),
         min_value=1,
         max_value=12,
-        value=4,
+        value=_session_concurrency(
+            "translation_concurrency",
+            _config_int(loaded_config, "translation_concurrency", 4) if loaded_config else 4,
+        ),
         help=_t("concurrency_help"),
         key="translation_concurrency",
     )
@@ -1532,7 +1603,10 @@ with st.sidebar:
         _t("review_concurrency"),
         min_value=1,
         max_value=12,
-        value=4,
+        value=_session_concurrency(
+            "review_concurrency",
+            _config_int(loaded_config, "review_concurrency", 4) if loaded_config else 4,
+        ),
         help=_t("concurrency_help"),
         key="review_concurrency",
     )
