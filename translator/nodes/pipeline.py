@@ -83,8 +83,7 @@ def translate_and_review_segments(
                     progress_callback,
                     stage="pipeline",
                     message="Pipeline: pomijam już przetłumaczony segment",
-                    current=_pipeline_progress(translations, review_results, total),
-                    total=_pipeline_total(total),
+                    **_pipeline_progress_fields(translations, review_results, total),
                     segment_id=segment.segment_id,
                 )
             continue
@@ -139,8 +138,7 @@ def translate_and_review_segments(
                 progress_callback,
                 stage="pipeline",
                 message="Pipeline: używam zapisanego tłumaczenia identycznego segmentu",
-                current=_pipeline_progress(translations, review_results, total),
-                total=_pipeline_total(total),
+                **_pipeline_progress_fields(translations, review_results, total),
                 segment_id=segment.segment_id,
             )
             continue
@@ -177,8 +175,7 @@ def translate_and_review_segments(
                 progress_callback,
                 stage="pipeline",
                 message="Pipeline: używam trwałego cache tłumaczenia",
-                current=_pipeline_progress(translations, review_results, total),
-                total=_pipeline_total(total),
+                **_pipeline_progress_fields(translations, review_results, total),
                 segment_id=segment.segment_id,
             )
             continue
@@ -316,8 +313,7 @@ def translate_and_review_segments(
             progress_callback,
             stage="pipeline",
             message="Pipeline: tłumaczenie i review równolegle",
-            current=_pipeline_progress(translations, review_results, total),
-            total=_pipeline_total(total),
+            **_pipeline_progress_fields(translations, review_results, total),
         )
 
         while active_translations or active_reviews:
@@ -394,8 +390,7 @@ def translate_and_review_segments(
                         progress_callback,
                         stage="pipeline",
                         message="Pipeline: segment przetłumaczony",
-                        current=_pipeline_progress(translations, review_results, total),
-                        total=_pipeline_total(total),
+                        **_pipeline_progress_fields(translations, review_results, total),
                         segment_id=segment.segment_id,
                     )
                     for duplicate in group.duplicates:
@@ -403,8 +398,7 @@ def translate_and_review_segments(
                             progress_callback,
                             stage="pipeline",
                             message="Pipeline: używam zapisanego tłumaczenia identycznego segmentu",
-                            current=_pipeline_progress(translations, review_results, total),
-                            total=_pipeline_total(total),
+                            **_pipeline_progress_fields(translations, review_results, total),
                             segment_id=duplicate.segment_id,
                         )
                     continue
@@ -454,8 +448,7 @@ def translate_and_review_segments(
                     progress_callback,
                     stage="pipeline",
                     message="Pipeline: segment po review",
-                    current=_pipeline_progress(translations, review_results, total),
-                    total=_pipeline_total(total),
+                    **_pipeline_progress_fields(translations, review_results, total),
                     segment_id=item.segment.segment_id,
                 )
 
@@ -582,6 +575,21 @@ def _pipeline_progress(
     total: int,
 ) -> int:
     return min(len(translations), total) + min(len(review_results), total)
+
+
+def _pipeline_progress_fields(
+    translations: dict[str, TranslationResult],
+    review_results: dict[str, ReviewResult],
+    total: int,
+) -> dict[str, int]:
+    return {
+        "current": _pipeline_progress(translations, review_results, total),
+        "total": _pipeline_total(total),
+        "translations_done": min(len(translations), total),
+        "translations_total": total,
+        "reviews_done": min(len(review_results), total),
+        "reviews_total": total,
+    }
 
 
 def _pipeline_total(total: int) -> int:

@@ -27,6 +27,27 @@ class ProgressTests(unittest.TestCase):
         finally:
             logger.disabled = previous_disabled
 
+    def test_progress_event_preserves_extra_fields(self) -> None:
+        events: list[dict] = []
+
+        emit_progress(
+            events.append,
+            stage="pipeline",
+            message="Pipeline: segment po review",
+            current=323,
+            total=564,
+            segment_id="p002-b0017",
+            translations_done=282,
+            translations_total=282,
+            reviews_done=41,
+            reviews_total=282,
+        )
+
+        self.assertEqual(events[0]["translations_done"], 282)
+        self.assertEqual(events[0]["translations_total"], 282)
+        self.assertEqual(events[0]["reviews_done"], 41)
+        self.assertEqual(events[0]["reviews_total"], 282)
+
 
 if __name__ == "__main__":
     unittest.main()

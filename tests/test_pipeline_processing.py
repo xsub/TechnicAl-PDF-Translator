@@ -61,6 +61,7 @@ class PipelineProcessingTests(unittest.TestCase):
             ]
             translator = SlidingTranslator(review_started, events)
             reviewer = SlidingReviewer(review_started, events)
+            progress_events: list[dict] = []
 
             with (
                 patch("translator.nodes.pipeline.build_translator", return_value=translator),
@@ -76,11 +77,22 @@ class PipelineProcessingTests(unittest.TestCase):
                         "translation_memory_hits": 0,
                         "persistent_translation_cache_hits": 0,
                         "translation_memory_misses": 0,
-                    }
+                    },
+                    progress_callback=progress_events.append,
                 )
 
             self.assertEqual(len(result["translations"]), 2)
             self.assertEqual(len(result["review_results"]), 2)
+            reviewed_events = [
+                event
+                for event in progress_events
+                if event["message"] == "Pipeline: segment po review"
+            ]
+            self.assertTrue(reviewed_events)
+            self.assertEqual(reviewed_events[-1]["translations_done"], 2)
+            self.assertEqual(reviewed_events[-1]["translations_total"], 2)
+            self.assertEqual(reviewed_events[-1]["reviews_done"], 2)
+            self.assertEqual(reviewed_events[-1]["reviews_total"], 2)
             self.assertIn(("s2_released", "s2", True), events)
             self.assertLess(
                 events.index(("review_start", "s1", None)),

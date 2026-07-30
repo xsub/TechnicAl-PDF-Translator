@@ -133,6 +133,7 @@ UI_TEXT = {
         "progress_stage": "Etap",
         "progress_segment": "segment",
         "progress_stage_progress": "postęp etapu",
+        "pipeline_split_progress": "tłumaczenia {translations_done}/{translations_total} | review {reviews_done}/{reviews_total}",
         "progress_working": "Pracuję...",
         "mock_result_warning": "Ten wynik powstał w trybie mock. To tryb testowy przepływu, nie prawdziwe tłumaczenie dokumentu. Dla realnego PDF-a wybierz tłumacza OpenAI.",
         "live_preview": "Podgląd na żywo tłumaczenia",
@@ -278,6 +279,7 @@ UI_TEXT = {
         "progress_stage": "Stage",
         "progress_segment": "segment",
         "progress_stage_progress": "stage progress",
+        "pipeline_split_progress": "translations {translations_done}/{translations_total} | review {reviews_done}/{reviews_total}",
         "progress_working": "Working...",
         "mock_result_warning": "This result was created in mock mode. It is a workflow test, not a real document translation. For a real PDF, choose the OpenAI translator.",
         "live_preview": "Live translation preview",
@@ -451,6 +453,21 @@ def _progress_message(raw_message: str) -> str:
             return translated
 
     return raw_message
+
+
+def _pipeline_progress_label(event: dict) -> str | None:
+    translations_total = _safe_int(event.get("translations_total"))
+    reviews_total = _safe_int(event.get("reviews_total"))
+    if translations_total <= 0 and reviews_total <= 0:
+        return None
+
+    return _t(
+        "pipeline_split_progress",
+        translations_done=_safe_int(event.get("translations_done")),
+        translations_total=translations_total,
+        reviews_done=_safe_int(event.get("reviews_done")),
+        reviews_total=reviews_total,
+    )
 
 
 def _localized_issue_message(raw_message: str) -> str:
@@ -803,32 +820,47 @@ def _make_progress_callback(
         current = event.get("current")
         total = event.get("total")
         segment_id = event.get("segment_id")
+        pipeline_progress_label = _pipeline_progress_label(event) if stage == "pipeline" else None
+        status_label = message
 
         if isinstance(current, int) and isinstance(total, int) and total > 0:
             ratio = min(max(current / total, 0.0), 1.0)
-            progress_text = f"{message}: {current}/{total}"
+            progress_text = (
+                f"{message} | {pipeline_progress_label}"
+                if pipeline_progress_label
+                else f"{message}: {current}/{total}"
+            )
             if segment_id:
                 progress_text = f"{progress_text} - {segment_id}"
+            status_label = progress_text
             progress_bar.progress(ratio, text=progress_text)
+            stage_progress = pipeline_progress_label or f"{current}/{total}"
             detail_slot.caption(
                 f"{_t('progress_stage')}: `{stage}` | {_t('progress_segment')}: `{segment_id or '-'}` | "
-                f"{_t('progress_stage_progress')}: {current}/{total}"
+                f"{_t('progress_stage_progress')}: {stage_progress}"
             )
-            log_key = (stage, current // 10)
+            log_key = (
+                (stage, _safe_int(event.get("translations_done")), _safe_int(event.get("reviews_done")))
+                if pipeline_progress_label
+                else (stage, current // 10)
+            )
         else:
             ratio = 1.0 if stage in {"done", "human_review"} else 0.0
             progress_bar.progress(ratio, text=message)
             detail_slot.caption(f"{_t('progress_stage')}: `{stage}`")
             log_key = (stage, message)
 
-        _status_update(status, label=message)
+        _status_update(status, label=status_label)
 
         if stage != last_stage["value"]:
             history_slot.write(f"**{message}**")
             last_stage["value"] = stage
             last_log_key["value"] = log_key
         elif log_key != last_log_key["value"] and isinstance(current, int) and isinstance(total, int):
-            history_slot.caption(f"{message}: {current}/{total}")
+            if pipeline_progress_label:
+                history_slot.caption(f"{message}: {pipeline_progress_label}")
+            else:
+                history_slot.caption(f"{message}: {current}/{total}")
             last_log_key["value"] = log_key
 
         if live_preview_slot is not None and stage in {"extract", "prepare", "translate", "review", "revise", "pipeline"}:

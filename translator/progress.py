@@ -19,6 +19,7 @@ def emit_progress(
     current: int | None = None,
     total: int | None = None,
     segment_id: str | None = None,
+    **extra_fields: Any,
 ) -> None:
     event = {
         "stage": stage,
@@ -26,6 +27,7 @@ def emit_progress(
         "current": current,
         "total": total,
         "segment_id": segment_id,
+        **extra_fields,
     }
     log_debug("progress", **event)
 
