@@ -12,12 +12,14 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
+from translator.debug import log_debug
 from translator.domain.glossary import load_glossary
 from translator.domain.locale_formatting import apply_locale_formatting
 from translator.domain.protected import validate_segment_invariants
 from translator.languages import LANGUAGE_OPTIONS, language_index
 from translator.llm.clients import build_reviewer, build_translator
 from translator.operator_refinement import suggest_operator_preferred_phrase, suggest_operator_replacement_text
+from translator.operator_phrase_memory import UserPhraseMemory, UserPhraseMemoryMatch
 from translator.schemas import JobConfig, ReviewFinding, TranslationResult
 from translator.storage import JobStore
 from translator.utils import new_job_id
@@ -81,6 +83,14 @@ UI_TEXT = {
         "review_concurrency": "Recenzja",
         "concurrency_help": "Ile requestów LLM wysyłać naraz. Wyższa wartość zwykle przyspiesza długi PDF, ale może trafić w limity API.",
         "require_human_review": "Zatrzymaj przy istotnych zastrzeżeniach",
+        "user_phrase_memory": "Pamięć fraz operatora",
+        "use_user_phrase_memory": "Użyj fraz tłumaczeń użytkownika",
+        "use_user_phrase_memory_help": "Gdy włączone, zapisane frazy operatora są traktowane jako zaufane i stosowane automatycznie przed recenzją. Gdy wyłączone, recenzja tylko podpowiada je jako rozwiązanie.",
+        "phrase_memory_count": "Zapamiętane frazy dla tej pary języków: `{count}`.",
+        "phrase_memory_status": "frazy",
+        "phrase_memory_auto": "auto",
+        "phrase_memory_suggestions": "sugestie",
+        "phrase_memory_hits": "Użycia pamięci fraz operatora: `{hits}`.",
         "debug": "Tryb debug - logi w terminalu",
         "debug_help": "Wypisuje do konsoli każdy etap, segment, request LLM, czas trwania i błędy. Nie loguje kluczy API.",
         "mock_warning": "Wybrany jest mock. To sprawdza przepływ aplikacji, ale nie tłumaczy prawdziwego dokumentu.",
@@ -215,6 +225,8 @@ UI_TEXT = {
         "operator_replace_placeholder": "np. wysuszonej warstwie farby",
         "operator_preferred_phrase": "Lepsza fraza / termin bazowy",
         "operator_preferred_placeholder": "np. wyschnięta powłoka farby",
+        "operator_phrase_memory_suggestion": "Z pamięci fraz operatora: `{replace}` → `{preferred}`.",
+        "operator_phrase_memory_saved": "Fraza została zapisana w pamięci operatora.",
         "operator_rewrite_button": "Przerób segment z tą frazą",
         "operator_rewrite_missing_phrase": "Wpisz lepszą frazę lub termin bazowy.",
         "operator_rewrite_spinner": "Przerabiam segment i sprawdzam wynik...",
@@ -287,6 +299,14 @@ UI_TEXT = {
         "review_concurrency": "Review",
         "concurrency_help": "How many LLM requests to send at the same time. Higher values usually speed up long PDFs, but may hit API limits.",
         "require_human_review": "Stop on material issues",
+        "user_phrase_memory": "Operator phrase memory",
+        "use_user_phrase_memory": "Use user translation phrases",
+        "use_user_phrase_memory_help": "When enabled, saved operator phrases are treated as trusted and applied automatically before review. When disabled, review only suggests them as fixes.",
+        "phrase_memory_count": "Saved phrases for this language pair: `{count}`.",
+        "phrase_memory_status": "phrases",
+        "phrase_memory_auto": "auto",
+        "phrase_memory_suggestions": "suggestions",
+        "phrase_memory_hits": "Operator phrase memory uses: `{hits}`.",
         "debug": "Debug mode - terminal logs",
         "debug_help": "Prints every stage, segment, LLM request, duration and error to the console. API keys are not logged.",
         "mock_warning": "Mock is selected. It tests the workflow, but does not really translate the document.",
@@ -421,6 +441,8 @@ UI_TEXT = {
         "operator_replace_placeholder": "e.g. dried ink layer",
         "operator_preferred_phrase": "Better phrase / base term",
         "operator_preferred_placeholder": "e.g. dry ink film",
+        "operator_phrase_memory_suggestion": "From operator phrase memory: `{replace}` → `{preferred}`.",
+        "operator_phrase_memory_saved": "Phrase saved to operator memory.",
         "operator_rewrite_button": "Rewrite segment with this phrase",
         "operator_rewrite_missing_phrase": "Enter a better phrase or base term.",
         "operator_rewrite_spinner": "Rewriting the segment and checking the result...",
@@ -493,6 +515,7 @@ ISSUE_TYPE_LABELS_PL = {
     "unexpected_addition": "nieoczekiwany dodatek",
     "forbidden_term": "termin zabroniony",
     "unchanged_source": "pozostawione źródło",
+    "user_phrase_memory": "pamięć fraz operatora",
     "terminology": "terminologia",
     "chemical_terminology": "terminologia chemiczna",
     "regulatory_terminology": "terminologia regulacyjna",
@@ -686,6 +709,10 @@ def _localized_issue_message(raw_message: str) -> str:
             r"^Termin '(.*?)' jest zabroniony dla '(.*?)'\.$",
             r"Term '\1' is forbidden for '\2'.",
         ),
+        (
+            r"^Pamięć fraz operatora ma zatwierdzoną podmianę: użyj '(.*?)' zamiast '(.*?)'\.$",
+            r"Operator phrase memory has a trusted replacement: use '\1' instead of '\2'.",
+        ),
     ]
     for pattern, replacement in patterns:
         translated = re.sub(pattern, replacement, raw_message)
@@ -870,19 +897,80 @@ def _suggest_replacement_text(issues: list[object]) -> str:
     return ""
 
 
+def _operator_phrase_memory_match(
+    segment: object,
+    translation: TranslationResult,
+    config: JobConfig,
+) -> UserPhraseMemoryMatch | None:
+    try:
+        matches = UserPhraseMemory.for_config(config).find_matches(
+            source_text=str(getattr(segment, "source_text", "")),
+            translated_text=translation.translated_text,
+            limit=1,
+        )
+    except Exception as exc:  # noqa: BLE001 - phrase memory must not break review UI
+        log_debug(
+            "operator_phrase_memory.lookup.failed",
+            segment_id=str(getattr(segment, "segment_id", translation.segment_id)),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return None
+
+    return matches[0] if matches else None
+
+
+def _save_operator_phrase_memory(
+    config: JobConfig,
+    segment: object,
+    *,
+    replace_phrase: str,
+    preferred_phrase: str,
+    approved_text: str,
+) -> bool:
+    try:
+        return UserPhraseMemory.for_config(config).store(
+            source_text=str(getattr(segment, "source_text", "")),
+            replace_text=replace_phrase,
+            preferred_text=preferred_phrase,
+            approved_text=approved_text,
+            job_id=str(config.job_id or ""),
+            segment_id=str(getattr(segment, "segment_id", "")),
+        )
+    except Exception as exc:  # noqa: BLE001 - memory write should not block the operator
+        log_debug(
+            "operator_phrase_memory.store.failed",
+            segment_id=str(getattr(segment, "segment_id", "")),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return False
+
+
 def _apply_operator_refinement_defaults(
     segment_id: str,
+    segment: object,
     translation: TranslationResult,
+    config: JobConfig,
     issues: list[object],
     *,
     replace_key: str,
     phrase_key: str,
-) -> None:
+) -> UserPhraseMemoryMatch | None:
     defaults_key = _operator_refinement_defaults_key(segment_id)
     previous_defaults = st.session_state.get(defaults_key)
+    memory_match = _operator_phrase_memory_match(segment, translation, config)
     new_defaults = {
-        "replace": suggest_operator_replacement_text(translation.translated_text),
-        "preferred": suggest_operator_preferred_phrase(issues, translation.translated_text),
+        "replace": (
+            memory_match.replace_text
+            if memory_match and memory_match.reason == "target_phrase"
+            else suggest_operator_replacement_text(translation.translated_text)
+        ),
+        "preferred": (
+            memory_match.preferred_text
+            if memory_match
+            else suggest_operator_preferred_phrase(issues, translation.translated_text)
+        ),
     }
 
     if isinstance(previous_defaults, dict):
@@ -891,7 +979,7 @@ def _apply_operator_refinement_defaults(
         if st.session_state.get(phrase_key, "") == previous_defaults.get("preferred", ""):
             st.session_state[phrase_key] = new_defaults["preferred"]
         st.session_state[defaults_key] = new_defaults
-        return
+        return memory_match
 
     legacy_replace_default = _suggest_replacement_text(issues)
     if replace_key not in st.session_state or st.session_state.get(replace_key, "") == legacy_replace_default:
@@ -899,6 +987,7 @@ def _apply_operator_refinement_defaults(
     if phrase_key not in st.session_state or not str(st.session_state.get(phrase_key, "") or "").strip():
         st.session_state[phrase_key] = new_defaults["preferred"]
     st.session_state[defaults_key] = new_defaults
+    return memory_match
 
 
 def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, fallback_text: str) -> None:
@@ -953,9 +1042,11 @@ def _render_operator_phrase_refinement(
     result_key = _operator_refinement_result_key(segment_id)
     error_key = _operator_refinement_error_key(segment_id)
 
-    _apply_operator_refinement_defaults(
+    memory_match = _apply_operator_refinement_defaults(
         segment_id,
+        segment,
         translation,
+        config,
         issues,
         replace_key=replace_key,
         phrase_key=phrase_key,
@@ -965,6 +1056,14 @@ def _render_operator_phrase_refinement(
     with st.container(border=True):
         st.markdown(f"##### :material/edit_note: {_t('operator_refinement_title')}")
         st.caption(_t("operator_refinement_caption"))
+        if memory_match:
+            st.info(
+                _t(
+                    "operator_phrase_memory_suggestion",
+                    replace=memory_match.replace_text,
+                    preferred=memory_match.preferred_text,
+                )
+            )
 
         replace_col, phrase_col = st.columns(2)
         replace_col.text_input(
@@ -1111,11 +1210,22 @@ def _rewrite_translation_with_operator_phrase(
     if _reviewer_provider_ready(config):
         review_result = build_reviewer(config).review(segment, revised, glossary, config)  # type: ignore[arg-type]
 
+    memory_saved = False
+    if not any(str(getattr(issue, "severity", "")).lower() == "critical" for issue in validation_issues):
+        memory_saved = _save_operator_phrase_memory(
+            config,
+            segment,
+            replace_phrase=replace_phrase,
+            preferred_phrase=preferred_phrase,
+            approved_text=revised.translated_text,
+        )
+
     return {
         "mode": mode,
         "preferred_phrase": preferred_phrase,
         "replace_phrase": replace_phrase,
         "proposed_text": revised.translated_text,
+        "memory_saved": memory_saved,
         "validation_issues": validation_issues,
         "review_result": review_result,
         "translation_token_usage": revised.token_usage,
@@ -1176,6 +1286,9 @@ def _render_operator_refinement_result(result: dict[str, object], *, edit_key: s
             st.session_state[edit_key] = str(result.get("proposed_text") or "")
             result["auto_applied_to_editor"] = True
             st.success(_t("operator_rewrite_applied"))
+
+    if result.get("memory_saved"):
+        st.caption(_t("operator_phrase_memory_saved"))
 
     if result.get("mode") != "llm":
         st.warning(_t("operator_rewrite_local_warning"))
@@ -1401,9 +1514,25 @@ def _config_int(config: object, name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _config_bool(config: object | None, name: str, default: bool = False) -> bool:
+    if config is None:
+        return default
+    raw_value = config.get(name, default) if isinstance(config, dict) else getattr(config, name, default)
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(raw_value)
+
+
 def _session_concurrency(name: str, fallback: int) -> int:
     value = _safe_int(st.session_state.get(name))
     return value if value > 0 else fallback
+
+
+def _current_use_user_phrase_memory(fallback_config: object | None = None) -> bool:
+    fallback = _config_bool(fallback_config, "use_user_phrase_memory", False)
+    return bool(st.session_state.get("use_user_phrase_memory", fallback))
 
 
 def _current_parallelism(fallback_config: object | None = None) -> tuple[int, int]:
@@ -1436,6 +1565,7 @@ def _with_current_parallelism(config: JobConfig | dict | object) -> JobConfig:
         update={
             "translation_concurrency": translation_concurrency,
             "review_concurrency": review_concurrency,
+            "use_user_phrase_memory": _current_use_user_phrase_memory(config),
         }
     )
 
@@ -1636,6 +1766,7 @@ def _run_translation(
     translation_concurrency: int,
     review_concurrency: int,
     require_human_review: bool,
+    use_user_phrase_memory: bool,
     debug: bool,
 ) -> None:
     errors = _validate_provider_configuration(translator_provider, reviewer_provider)
@@ -1659,6 +1790,7 @@ def _run_translation(
         require_human_review=require_human_review,
         translation_concurrency=translation_concurrency,
         review_concurrency=review_concurrency,
+        use_user_phrase_memory=use_user_phrase_memory,
         debug=debug,
         job_id=job_id,
     )
@@ -1782,7 +1914,9 @@ def _render_status(state: dict) -> None:
             f" | {_t('translator_provider')}: `{config.translator_provider}`, "
             f"{_t('review_provider')}: `{config.reviewer_provider}`"
             f" | {_t('parallelism_status')}: `{translation_concurrency}/{review_concurrency}`"
-    )
+            f" | {_t('phrase_memory_status')}: "
+            f"`{_t('phrase_memory_auto') if config.use_user_phrase_memory else _t('phrase_memory_suggestions')}`"
+        )
 
     st.subheader(_t("status"))
     st.write(f"`{_display_status_label(state.get('status', 'unknown'))}`{provider_note}")
@@ -1880,6 +2014,7 @@ def _render_status(state: dict) -> None:
     st.caption(_t("review_findings_caption", review_findings=review_findings))
     _render_review_findings_table(state)
     _render_token_usage_metrics(state)
+    st.caption(_t("phrase_memory_hits", hits=state.get("user_phrase_memory_hits", 0)))
     st.caption(
         _t(
             "cache_status",
@@ -2187,6 +2322,41 @@ def _unique_widget_key(prefix: str, *parts: object) -> str:
     return f"{prefix}_{next(WIDGET_KEY_COUNTER)}_{stable_part}"
 
 
+def _store_operator_phrase_memory_for_decisions(state: dict, decisions: dict[str, dict]) -> int:
+    config = state.get("config")
+    if not config:
+        return 0
+
+    config = _coerce_job_config(config)
+    segments = {segment.segment_id: segment for segment in state.get("segments", [])}
+    stored = 0
+
+    for segment_id, decision in decisions.items():
+        if str(decision.get("action") or "") == "keep_source":
+            continue
+
+        segment = segments.get(segment_id)
+        if not segment:
+            continue
+
+        replace_phrase = str(st.session_state.get(f"operator_replace_{segment_id}", "") or "").strip()
+        preferred_phrase = str(st.session_state.get(f"operator_phrase_{segment_id}", "") or "").strip()
+        approved_text = str(decision.get("text") or "").strip()
+        if not replace_phrase or not preferred_phrase or not approved_text:
+            continue
+
+        if _save_operator_phrase_memory(
+            config,
+            segment,
+            replace_phrase=replace_phrase,
+            preferred_phrase=preferred_phrase,
+            approved_text=approved_text,
+        ):
+            stored += 1
+
+    return stored
+
+
 def _render_human_review(state: dict) -> None:
     unresolved_segments = state.get("unresolved_segments", [])
     if not unresolved_segments:
@@ -2344,6 +2514,7 @@ def _render_human_review(state: dict) -> None:
 
     with st.container(horizontal=True):
         if st.button(_t("save_decisions"), type="primary", icon=":material/save:"):
+            _store_operator_phrase_memory_for_decisions(state, decisions)
             status = st.status(_t("saving_decisions"), expanded=True)
             progress_bar = status.progress(0, text=_t("rendering_start"))
             detail_slot = status.empty()
@@ -2523,6 +2694,30 @@ with st.sidebar:
         help=_t("concurrency_help"),
         key="review_concurrency",
     )
+    st.subheader(_t("user_phrase_memory"))
+    use_user_phrase_memory = st.toggle(
+        _t("use_user_phrase_memory"),
+        value=_config_bool(loaded_config, "use_user_phrase_memory", False),
+        key="use_user_phrase_memory",
+        help=_t("use_user_phrase_memory_help"),
+    )
+    phrase_memory_config = (
+        loaded_config
+        if isinstance(loaded_config, JobConfig)
+        else JobConfig(
+            source_pdf_path="dummy.pdf",
+            source_language=source_language or "English",
+            target_language=target_language or "Polish",
+        )
+    )
+    phrase_memory_config = _coerce_job_config(phrase_memory_config).model_copy(
+        update={
+            "source_language": source_language or "English",
+            "target_language": target_language or "Polish",
+            "use_user_phrase_memory": use_user_phrase_memory,
+        }
+    )
+    st.caption(_t("phrase_memory_count", count=UserPhraseMemory.for_config(phrase_memory_config).count()))
     require_human_review = st.toggle(_t("require_human_review"), value=True, key="require_human_review")
     debug = st.toggle(
         _t("debug"),
@@ -2555,6 +2750,7 @@ if submitted:
             translation_concurrency,
             review_concurrency,
             require_human_review,
+            use_user_phrase_memory,
             debug,
         )
 

@@ -218,6 +218,7 @@ def _initial_state(config: JobConfig) -> TranslationState:
         "translation_memory_hits": 0,
         "persistent_translation_cache_hits": 0,
         "translation_memory_misses": 0,
+        "user_phrase_memory_hits": 0,
         "translation_cache_scope": build_translation_cache_scope(config),
         "llm_inflight": None,
         "operator_decisions": {},

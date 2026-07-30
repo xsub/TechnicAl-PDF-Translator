@@ -30,6 +30,7 @@ class TranslationState(TypedDict, total=False):
     translation_memory_hits: int
     persistent_translation_cache_hits: int
     translation_memory_misses: int
+    user_phrase_memory_hits: int
     translation_cache_scope: dict[str, Any]
     llm_inflight: dict[str, Any] | None
     operator_decisions: dict[str, OperatorDecision]

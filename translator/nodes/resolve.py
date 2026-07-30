@@ -19,9 +19,14 @@ def resolve_findings(state: TranslationState) -> TranslationState:
         if not blocking_findings:
             continue
 
+        has_user_phrase_memory_finding = any(
+            getattr(finding, "category", "") == "user_phrase_memory"
+            for finding in blocking_findings
+        )
         can_auto_revise = (
             attempts.get(segment_id, 0) < config.max_revision_attempts
             and all(finding.proposed_translation for finding in blocking_findings)
+            and not has_user_phrase_memory_finding
         )
         if can_auto_revise:
             revision_required.add(segment_id)

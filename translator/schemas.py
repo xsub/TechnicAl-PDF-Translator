@@ -147,6 +147,7 @@ class JobConfig(BaseModel):
     max_revision_attempts: int = 1
     translation_concurrency: int = Field(default=4, ge=1, le=16)
     review_concurrency: int = Field(default=4, ge=1, le=16)
+    use_user_phrase_memory: bool = False
     debug: bool = False
     job_id: str | None = None
 

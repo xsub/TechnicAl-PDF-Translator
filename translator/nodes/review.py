@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
 from translator.llm.clients import build_reviewer, estimate_review_request_tokens
+from translator.operator_phrase_memory import (
+    add_phrase_memory_review_findings,
+    apply_user_phrase_memory_to_translation,
+)
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
 from translator.schemas import DocumentSegment, ReviewResult, TranslationResult
 from translator.state import TranslationState
@@ -28,16 +32,21 @@ def review_translation(
     config = state["config"]
     glossary = load_glossary(config.glossary_path)
     client = build_reviewer(config)
-    translations = state.get("translations", {})
+    translations = dict(state.get("translations", {}))
     review_results = dict(state.get("review_results", {})) if skip_existing else {}
     segments = state.get("segments", [])
     total = len(segments)
     pending_reviews: list[PendingReview] = []
+    phrase_memory_hits = int(state.get("user_phrase_memory_hits", 0))
 
     for index, segment in enumerate(segments, start=1):
         translation = translations.get(segment.segment_id)
         if not translation:
             continue
+        translation, applied_matches = apply_user_phrase_memory_to_translation(segment, translation, config)
+        if applied_matches:
+            translations[segment.segment_id] = translation
+            phrase_memory_hits += len(applied_matches)
         if skip_existing and segment.segment_id in review_results:
             emit_progress(
                 progress_callback,
@@ -96,7 +105,9 @@ def review_translation(
                 checkpoint_callback(
                     _partial_review_state(
                         state,
+                        translations,
                         review_results,
+                        phrase_memory_hits,
                         _inflight_state(
                             active.values(),
                             operation="review",
@@ -121,9 +132,19 @@ def review_translation(
                         review_result = future.result()
                     except Exception:
                         if checkpoint_callback:
-                            checkpoint_callback(_partial_review_state(state, review_results, None, total))
+                            checkpoint_callback(
+                                _partial_review_state(
+                                    state,
+                                    translations,
+                                    review_results,
+                                    phrase_memory_hits,
+                                    None,
+                                    total,
+                                )
+                            )
                         raise
 
+                    review_result = add_phrase_memory_review_findings(item.segment, item.translation, config, review_result)
                     review_results[item.segment.segment_id] = review_result
                     submit_next()
 
@@ -131,7 +152,9 @@ def review_translation(
                         checkpoint_callback(
                             _partial_review_state(
                                 state,
+                                translations,
                                 review_results,
+                                phrase_memory_hits,
                                 _inflight_state(
                                     active.values(),
                                     operation="review",
@@ -164,18 +187,29 @@ def review_translation(
             review_results=len(review_results),
         )
 
-    return {**state, "review_results": review_results, "llm_inflight": None, "status": "translation_reviewed"}
+    return {
+        **state,
+        "translations": translations,
+        "review_results": review_results,
+        "user_phrase_memory_hits": phrase_memory_hits,
+        "llm_inflight": None,
+        "status": "translation_reviewed",
+    }
 
 
 def _partial_review_state(
     state: TranslationState,
+    translations: dict[str, TranslationResult],
     review_results: dict[str, ReviewResult],
+    phrase_memory_hits: int,
     llm_inflight: dict | None,
     total: int,
 ) -> dict:
     return {
         **state,
+        "translations": translations,
         "review_results": review_results,
+        "user_phrase_memory_hits": phrase_memory_hits,
         "llm_inflight": llm_inflight,
         "status": f"reviewing {len(review_results)}/{total}",
     }

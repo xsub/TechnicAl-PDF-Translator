@@ -14,6 +14,10 @@ from translator.llm.clients import (
     estimate_review_request_tokens,
     estimate_translation_request_tokens,
 )
+from translator.operator_phrase_memory import (
+    add_phrase_memory_review_findings,
+    apply_user_phrase_memory_to_translation,
+)
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
 from translator.schemas import DocumentSegment, ReviewResult, TranslationResult
 from translator.state import TranslationState
@@ -65,6 +69,7 @@ def translate_and_review_segments(
     memory_hits = int(state.get("translation_memory_hits", 0))
     persistent_cache_hits = int(state.get("persistent_translation_cache_hits", 0))
     memory_misses = int(state.get("translation_memory_misses", 0))
+    phrase_memory_hits = int(state.get("user_phrase_memory_hits", 0))
     cache_scope = state.get("translation_cache_scope") or translation_cache.scope
 
     pending_by_key: dict[str, PendingTranslationGroup] = {}
@@ -73,8 +78,13 @@ def translate_and_review_segments(
     scheduled_review_ids = set(review_results)
 
     def enqueue_review(segment: DocumentSegment, translation: TranslationResult) -> None:
+        nonlocal phrase_memory_hits
         if segment.segment_id in scheduled_review_ids:
             return
+        translation, applied_matches = apply_user_phrase_memory_to_translation(segment, translation, config)
+        if applied_matches:
+            translations[segment.segment_id] = translation
+            phrase_memory_hits += len(applied_matches)
         scheduled_review_ids.add(segment.segment_id)
         pending_reviews.append(PendingReview(segment=segment, translation=translation))
 
@@ -127,6 +137,7 @@ def translate_and_review_segments(
                 memory_hits,
                 persistent_cache_hits,
                 memory_misses,
+                phrase_memory_hits,
                 cache_scope,
                 None,
                 total,
@@ -166,6 +177,7 @@ def translate_and_review_segments(
                 memory_hits,
                 persistent_cache_hits,
                 memory_misses,
+                phrase_memory_hits,
                 cache_scope,
                 None,
                 total,
@@ -313,6 +325,7 @@ def translate_and_review_segments(
             memory_hits,
             persistent_cache_hits,
             memory_misses,
+            phrase_memory_hits,
             cache_scope,
             current_inflight(),
             total,
@@ -344,6 +357,7 @@ def translate_and_review_segments(
                             memory_hits,
                             persistent_cache_hits,
                             memory_misses,
+                            phrase_memory_hits,
                             cache_scope,
                             None,
                             total,
@@ -382,6 +396,7 @@ def translate_and_review_segments(
                         memory_hits,
                         persistent_cache_hits,
                         memory_misses,
+                        phrase_memory_hits,
                         cache_scope,
                         current_inflight(),
                         total,
@@ -426,12 +441,14 @@ def translate_and_review_segments(
                         memory_hits,
                         persistent_cache_hits,
                         memory_misses,
+                        phrase_memory_hits,
                         cache_scope,
                         None,
                         total,
                     )
                     raise
 
+                review_result = add_phrase_memory_review_findings(item.segment, item.translation, config, review_result)
                 review_results[item.segment.segment_id] = review_result
                 submit_next_reviews()
                 _checkpoint_pipeline(
@@ -442,6 +459,7 @@ def translate_and_review_segments(
                     memory_hits,
                     persistent_cache_hits,
                     memory_misses,
+                    phrase_memory_hits,
                     cache_scope,
                     current_inflight(),
                     total,
@@ -470,6 +488,7 @@ def translate_and_review_segments(
         memory_hits=memory_hits,
         persistent_cache_hits=persistent_cache_hits,
         memory_misses=memory_misses,
+        user_phrase_memory_hits=phrase_memory_hits,
     )
     return {
         **state,
@@ -478,6 +497,7 @@ def translate_and_review_segments(
         "translation_memory_hits": memory_hits,
         "persistent_translation_cache_hits": persistent_cache_hits,
         "translation_memory_misses": memory_misses,
+        "user_phrase_memory_hits": phrase_memory_hits,
         "translation_cache_scope": cache_scope,
         "llm_inflight": None,
         "status": "translation_reviewed",
@@ -509,6 +529,7 @@ def _checkpoint_pipeline(
     memory_hits: int,
     persistent_cache_hits: int,
     memory_misses: int,
+    phrase_memory_hits: int,
     cache_scope: dict,
     llm_inflight: dict | None,
     total: int,
@@ -524,6 +545,7 @@ def _checkpoint_pipeline(
             "translation_memory_hits": memory_hits,
             "persistent_translation_cache_hits": persistent_cache_hits,
             "translation_memory_misses": memory_misses,
+            "user_phrase_memory_hits": phrase_memory_hits,
             "translation_cache_scope": cache_scope,
             "llm_inflight": llm_inflight,
             "status": f"pipeline translated {len(translations)}/{total}, reviewed {len(review_results)}/{total}",

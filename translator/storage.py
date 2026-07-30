@@ -227,6 +227,7 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         "translation_memory_hits": state.get("translation_memory_hits", 0),
         "persistent_translation_cache_hits": state.get("persistent_translation_cache_hits", 0),
         "translation_memory_misses": state.get("translation_memory_misses", 0),
+        "user_phrase_memory_hits": state.get("user_phrase_memory_hits", 0),
         "llm_requests": token_usage["requests"],
         "llm_input_tokens": token_usage["input_tokens"],
         "llm_output_tokens": token_usage["output_tokens"],
