@@ -1818,8 +1818,12 @@ loaded_state = st.session_state.get("translation_state")
 loaded_config = loaded_state.get("config") if isinstance(loaded_state, dict) else None
 
 with st.sidebar:
-    brand_col, version_col = st.columns([0.68, 0.32], vertical_alignment="center")
-    brand_col.markdown("**TechnicAl.**")
+    st.markdown("*PuffyClouds*")
+    brand_col, version_col = st.columns([0.72, 0.28], vertical_alignment="center")
+    brand_col.markdown(
+        '<span style="font-size: 3rem; font-weight: 800; line-height: 1;">TechnicAl</span>',
+        unsafe_allow_html=True,
+    )
     version_col.caption(f"`v{_app_version()}`", text_alignment="right")
     st.header(_t("configuration"))
     st.segmented_control(
