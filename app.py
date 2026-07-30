@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import tomllib
+from concurrent.futures import Future, ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version
 from itertools import count
 from pathlib import Path
@@ -215,8 +216,14 @@ UI_TEXT = {
         "operator_rewrite_button": "Przerób segment z tą frazą",
         "operator_rewrite_missing_phrase": "Wpisz lepszą frazę lub termin bazowy.",
         "operator_rewrite_spinner": "Przerabiam segment i sprawdzam wynik...",
+        "operator_rewrite_queued": "Poprawka została wysłana do tła. Możesz kontynuować review innych segmentów.",
+        "operator_rewrite_background_running": "Poprawka działa w tle dla frazy `{phrase}`. Możesz kontynuować review.",
+        "operator_rewrite_refresh": "Odśwież wynik poprawki",
+        "operator_rewrite_failed": "Poprawka w tle zakończyła się błędem: {error}",
         "operator_rewrite_result": "Wynik poprawki operatora",
         "operator_rewrite_applied": "Wynik został podstawiony do pola „Zatwierdzony tekst”.",
+        "operator_rewrite_not_auto_applied": "Nie podstawiono automatycznie, bo pole „Zatwierdzony tekst” zmieniło się podczas pracy w tle.",
+        "operator_rewrite_apply_result": "Wstaw wynik do zatwierdzonego tekstu",
         "operator_rewrite_source": "Tryb poprawki: `{mode}`.",
         "operator_rewrite_mode_llm": "LLM + review",
         "operator_rewrite_mode_local": "lokalna podmiana",
@@ -415,8 +422,14 @@ UI_TEXT = {
         "operator_rewrite_button": "Rewrite segment with this phrase",
         "operator_rewrite_missing_phrase": "Enter a better phrase or base term.",
         "operator_rewrite_spinner": "Rewriting the segment and checking the result...",
+        "operator_rewrite_queued": "The refinement was sent to the background. You can continue reviewing other segments.",
+        "operator_rewrite_background_running": "Refinement is running in the background for phrase `{phrase}`. You can continue reviewing.",
+        "operator_rewrite_refresh": "Refresh refinement result",
+        "operator_rewrite_failed": "Background refinement failed: {error}",
         "operator_rewrite_result": "Operator refinement result",
         "operator_rewrite_applied": "The result was copied into the Approved text field.",
+        "operator_rewrite_not_auto_applied": "I did not auto-apply it because the Approved text field changed while the background task was running.",
+        "operator_rewrite_apply_result": "Insert result into approved text",
         "operator_rewrite_source": "Refinement mode: `{mode}`.",
         "operator_rewrite_mode_llm": "LLM + review",
         "operator_rewrite_mode_local": "local replacement",
@@ -818,6 +831,30 @@ def _operator_refinement_result_key(segment_id: str) -> str:
     return f"operator_refinement_result_{segment_id}"
 
 
+def _operator_refinement_task_key(segment_id: str) -> str:
+    return f"operator_refinement_task_{segment_id}"
+
+
+def _operator_refinement_error_key(segment_id: str) -> str:
+    return f"operator_refinement_error_{segment_id}"
+
+
+def _operator_refinement_worker_count() -> int:
+    try:
+        requested = int(os.getenv("OPERATOR_REFINEMENT_WORKERS", "3"))
+    except ValueError:
+        requested = 3
+    return min(max(requested, 1), 8)
+
+
+@st.cache_resource
+def _operator_refinement_executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(
+        max_workers=_operator_refinement_worker_count(),
+        thread_name_prefix="operator-refine",
+    )
+
+
 def _suggest_replacement_text(issues: list[object]) -> str:
     for issue in issues:
         evidence = str(getattr(issue, "translation_evidence", "") or getattr(issue, "translated_value", "") or "")
@@ -825,6 +862,44 @@ def _suggest_replacement_text(issues: list[object]) -> str:
         if evidence and len(evidence) <= 120:
             return evidence
     return ""
+
+
+def _poll_operator_refinement_task(segment_id: str, *, edit_key: str, fallback_text: str) -> None:
+    task_key = _operator_refinement_task_key(segment_id)
+    task = st.session_state.get(task_key)
+    if not isinstance(task, dict):
+        return
+
+    future = task.get("future")
+    if not isinstance(future, Future) or not future.done():
+        return
+
+    st.session_state.pop(task_key, None)
+    error_key = _operator_refinement_error_key(segment_id)
+    try:
+        result = future.result()
+    except Exception as exc:  # noqa: BLE001 - show background failure in the review UI
+        st.session_state[error_key] = str(exc)
+        return
+
+    base_edit_value = str(task.get("edit_value_at_submit") or "")
+    current_edit_value = str(st.session_state.get(edit_key, fallback_text) or "")
+    auto_applied = current_edit_value == base_edit_value
+    result["auto_applied_to_editor"] = auto_applied
+    if auto_applied:
+        st.session_state[edit_key] = str(result.get("proposed_text") or "")
+    st.session_state[_operator_refinement_result_key(segment_id)] = result
+    st.session_state.pop(error_key, None)
+
+
+def _operator_refinement_running(segment_id: str) -> dict | None:
+    task = st.session_state.get(_operator_refinement_task_key(segment_id))
+    if not isinstance(task, dict):
+        return None
+    future = task.get("future")
+    if isinstance(future, Future) and not future.done():
+        return task
+    return None
 
 
 def _render_operator_phrase_refinement(
@@ -839,9 +914,11 @@ def _render_operator_phrase_refinement(
     replace_key = f"operator_replace_{segment_id}"
     phrase_key = f"operator_phrase_{segment_id}"
     result_key = _operator_refinement_result_key(segment_id)
+    error_key = _operator_refinement_error_key(segment_id)
 
     st.session_state.setdefault(replace_key, _suggest_replacement_text(issues))
     st.session_state.setdefault(phrase_key, "")
+    _poll_operator_refinement_task(segment_id, edit_key=edit_key, fallback_text=translation.translated_text)
 
     with st.container(border=True):
         st.markdown(f"##### :material/edit_note: {_t('operator_refinement_title')}")
@@ -859,36 +936,59 @@ def _render_operator_phrase_refinement(
             placeholder=_t("operator_preferred_placeholder"),
         )
 
+        running_task = _operator_refinement_running(segment_id)
         if st.button(
             _t("operator_rewrite_button"),
             key=f"operator_rewrite_{segment_id}",
             icon=":material/auto_fix_high:",
+            disabled=running_task is not None,
         ):
             preferred_phrase = str(st.session_state.get(phrase_key, "") or "").strip()
             replace_phrase = str(st.session_state.get(replace_key, "") or "").strip()
             if not preferred_phrase:
                 st.warning(_t("operator_rewrite_missing_phrase"))
             else:
-                try:
-                    with st.spinner(_t("operator_rewrite_spinner")):
-                        result = _rewrite_translation_with_operator_phrase(
-                            segment,
-                            translation,
-                            config,
-                            preferred_phrase=preferred_phrase,
-                            replace_phrase=replace_phrase,
-                            issues=issues,
-                        )
-                except Exception as exc:  # noqa: BLE001 - show failed refinement without losing operator edits
-                    st.error(str(exc))
-                    return
-                st.session_state[result_key] = result
-                st.session_state[edit_key] = result["proposed_text"]
-                st.rerun()
+                future = _operator_refinement_executor().submit(
+                    _rewrite_translation_with_operator_phrase,
+                    segment,
+                    translation,
+                    config,
+                    preferred_phrase=preferred_phrase,
+                    replace_phrase=replace_phrase,
+                    issues=issues,
+                )
+                st.session_state[_operator_refinement_task_key(segment_id)] = {
+                    "future": future,
+                    "preferred_phrase": preferred_phrase,
+                    "replace_phrase": replace_phrase,
+                    "edit_value_at_submit": str(st.session_state.get(edit_key, translation.translated_text) or ""),
+                }
+                st.session_state.pop(result_key, None)
+                st.session_state.pop(error_key, None)
+                st.success(_t("operator_rewrite_queued"))
+                _poll_operator_refinement_task(segment_id, edit_key=edit_key, fallback_text=translation.translated_text)
+                running_task = _operator_refinement_running(segment_id)
+
+        error = st.session_state.get(error_key)
+        if error:
+            st.error(_t("operator_rewrite_failed", error=error))
+
+        if running_task:
+            st.info(
+                _t(
+                    "operator_rewrite_background_running",
+                    phrase=running_task.get("preferred_phrase", "-"),
+                )
+            )
+            st.button(
+                _t("operator_rewrite_refresh"),
+                key=f"operator_rewrite_refresh_{segment_id}",
+                icon=":material/refresh:",
+            )
 
         result = st.session_state.get(result_key)
         if result:
-            _render_operator_refinement_result(result)
+            _render_operator_refinement_result(result, edit_key=edit_key)
 
 
 def _rewrite_translation_with_operator_phrase(
@@ -918,7 +1018,7 @@ def _rewrite_translation_with_operator_phrase(
         if issues:
             explanation_parts.append(
                 "Existing review/validation context: "
-                + "; ".join(_issue_label(issue) for issue in issues[:5])
+                + "; ".join(_raw_issue_summary(issue) for issue in issues[:5])
             )
         operator_finding = ReviewFinding(
             segment_id=str(getattr(segment, "segment_id", translation.segment_id)),
@@ -965,7 +1065,7 @@ def _rewrite_translation_with_operator_phrase(
     )
 
     review_result = None
-    if config.reviewer_provider != "mock" and not _validate_provider_configuration("mock", config.reviewer_provider):
+    if _reviewer_provider_ready(config):
         review_result = build_reviewer(config).review(segment, revised, glossary, config)  # type: ignore[arg-type]
 
     return {
@@ -991,7 +1091,22 @@ def _local_operator_phrase_rewrite(text: str, *, replace_phrase: str, preferred_
     return text
 
 
-def _render_operator_refinement_result(result: dict[str, object]) -> None:
+def _reviewer_provider_ready(config: JobConfig) -> bool:
+    if config.reviewer_provider == "openai":
+        return _has_env_value("OPENAI_API_KEY")
+    if config.reviewer_provider == "anthropic":
+        return _has_env_value("ANTHROPIC_API_KEY")
+    return False
+
+
+def _raw_issue_summary(issue: object) -> str:
+    severity = str(getattr(issue, "severity", "info"))
+    issue_type = str(getattr(issue, "issue_type", getattr(issue, "category", "issue")))
+    message = str(getattr(issue, "message", getattr(issue, "explanation", "")))
+    return f"{severity} - {issue_type}: {message}"
+
+
+def _render_operator_refinement_result(result: dict[str, object], *, edit_key: str) -> None:
     mode_key = "operator_rewrite_mode_llm" if result.get("mode") == "llm" else "operator_rewrite_mode_local"
     mode_label = _t(mode_key)
     validation_issues = list(result.get("validation_issues") or [])
@@ -1003,7 +1118,21 @@ def _render_operator_refinement_result(result: dict[str, object]) -> None:
     st.markdown(_t("operator_rewrite_result"))
     st.caption(_t("operator_rewrite_source", mode=mode_label))
     st.info(str(result.get("proposed_text") or ""))
-    st.success(_t("operator_rewrite_applied"))
+    if result.get("auto_applied_to_editor", False):
+        st.success(_t("operator_rewrite_applied"))
+    else:
+        st.warning(_t("operator_rewrite_not_auto_applied"))
+        if st.button(
+            _t("operator_rewrite_apply_result"),
+            key=(
+                f"operator_rewrite_apply_{edit_key}_"
+                f"{hashlib.sha1(str(result.get('proposed_text') or '').encode('utf-8')).hexdigest()[:12]}"
+            ),
+            icon=":material/low_priority:",
+        ):
+            st.session_state[edit_key] = str(result.get("proposed_text") or "")
+            result["auto_applied_to_editor"] = True
+            st.success(_t("operator_rewrite_applied"))
 
     if result.get("mode") != "llm":
         st.warning(_t("operator_rewrite_local_warning"))
