@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import tomllib
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import streamlit as st
@@ -19,6 +21,7 @@ load_dotenv(override=True)
 
 STORAGE_INPUT = Path("storage/input")
 STORAGE_OUTPUT = Path("storage/output")
+PACKAGE_NAME = "tech-translator-agent"
 
 PROVIDER_LABELS = {
     "pl": {
@@ -354,6 +357,23 @@ def _ui_language() -> str:
 def _t(text_key: str, **kwargs: object) -> str:
     template = UI_TEXT.get(_ui_language(), UI_TEXT["pl"]).get(text_key, UI_TEXT["pl"].get(text_key, text_key))
     return template.format(**kwargs) if kwargs else template
+
+
+def _app_version() -> str:
+    env_version = os.getenv("TECHNICAL_APP_VERSION", "").strip()
+    if env_version:
+        return env_version
+
+    try:
+        return version(PACKAGE_NAME)
+    except PackageNotFoundError:
+        pass
+
+    try:
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        return str(pyproject.get("project", {}).get("version") or "dev")
+    except Exception:
+        return "dev"
 
 
 def _progress_message(raw_message: str) -> str:
@@ -1333,6 +1353,7 @@ openai_ready = _has_env_value("OPENAI_API_KEY")
 anthropic_ready = _has_env_value("ANTHROPIC_API_KEY")
 
 with st.sidebar:
+    st.markdown(f"**TechnicAl** `v{_app_version()}`")
     st.header(_t("configuration"))
     st.segmented_control(
         _t("ui_language"),
