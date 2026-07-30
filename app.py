@@ -19,6 +19,7 @@ from translator.domain.locale_formatting import apply_locale_formatting
 from translator.domain.protected import validate_segment_invariants
 from translator.languages import LANGUAGE_OPTIONS, language_index
 from translator.llm.clients import build_reviewer, build_translator
+from translator.operator_decisions import build_selected_operator_decision
 from translator.operator_refinement import suggest_operator_preferred_phrase, suggest_operator_replacement_text
 from translator.operator_phrase_memory import UserPhraseMemory, UserPhraseMemoryMatch
 from translator.schemas import JobConfig, ReviewFinding, TranslationResult
@@ -251,13 +252,21 @@ UI_TEXT = {
         "operator_rewrite_review_findings": "Uwagi recenzenta po poprawce",
         "operator_refinement_note": "Fragment poprawiony przez użytkownika: preferowana fraza `{phrase}`.",
         "decision": "Decyzja",
+        "action_skip": "Pomiń teraz",
         "action_edit": "Zapisz edycję",
         "action_accept": "Akceptuj",
         "action_keep_source": "Zostaw źródło",
         "issues": "Uwagi i zastrzeżenia",
-        "save_decisions": "Zapisz decyzje dla pokazanych segmentów",
+        "selected_decisions": "Do zapisania: `{count}` segmentów.",
+        "save_decisions_hint": "Zapiszę tylko segmenty jawnie wybrane albo takie, w których zmieniono tekst. Samo pokazanie segmentu nie zapisuje decyzji.",
+        "no_selected_decisions": "Nie wybrano żadnego segmentu do zapisu. Wybierz decyzję przy segmencie albo zmień jego tekst.",
+        "save_decisions": "Zapisz wybrane decyzje",
         "saving_decisions": "Zapisuję decyzje i generuję wynik...",
         "decisions_saved": "Decyzje zapisane i wynik wygenerowany",
+        "undo_operator_decisions": "Cofnij ostatnie decyzje operatora",
+        "undo_operator_decisions_help": "Przywraca segmenty z ostatniej paczki decyzji do review i odłącza PDF wynikowy od checkpointu. Plików z dysku nie usuwa.",
+        "undo_operator_decisions_warning": "Ostatnio zapisano decyzje operatora dla `{count}` segmentów. Możesz je cofnąć i przejrzeć segmenty ponownie.",
+        "operator_decisions_undone": "Cofnięto ostatnie decyzje operatora. Segmenty wróciły do review.",
         "showing_segments": "Pokazuję {shown} z {total} segmentów po filtrze.",
         "output_ready": "PDF wynikowy jest gotowy.",
         "output_pdf_missing": "Checkpoint wskazuje PDF, ale plik nie istnieje na dysku: `{path}`.",
@@ -467,13 +476,21 @@ UI_TEXT = {
         "operator_rewrite_review_findings": "Reviewer findings after refinement",
         "operator_refinement_note": "User-refined fragment: preferred phrase `{phrase}`.",
         "decision": "Decision",
+        "action_skip": "Skip for now",
         "action_edit": "Save edit",
         "action_accept": "Accept",
         "action_keep_source": "Keep source",
         "issues": "Issues",
-        "save_decisions": "Save decisions for shown segments",
+        "selected_decisions": "Will save: `{count}` segments.",
+        "save_decisions_hint": "Only explicitly selected segments or segments with changed text will be saved. Merely showing a segment does not save a decision.",
+        "no_selected_decisions": "No segment was selected for saving. Pick a decision on a segment or edit its text.",
+        "save_decisions": "Save selected decisions",
         "saving_decisions": "Saving decisions and generating output...",
         "decisions_saved": "Decisions saved and output generated",
+        "undo_operator_decisions": "Undo last operator decisions",
+        "undo_operator_decisions_help": "Restores segments from the latest decision batch to review and detaches the output PDF from the checkpoint. It does not delete files from disk.",
+        "undo_operator_decisions_warning": "The last operator decision batch contains `{count}` segments. You can undo it and review those segments again.",
+        "operator_decisions_undone": "The latest operator decisions were undone. Segments are back in review.",
         "showing_segments": "Showing {shown} of {total} segments after filtering.",
         "output_ready": "Output PDF is ready.",
         "output_pdf_missing": "The checkpoint points to a PDF, but the file is missing on disk: `{path}`.",
@@ -2374,6 +2391,94 @@ def _store_operator_phrase_memory_for_decisions(state: dict, decisions: dict[str
     return stored
 
 
+def _job_store_for_config(config: JobConfig | dict | object) -> JobStore:
+    config = _coerce_job_config(config)
+    return JobStore(Path(config.output_dir).parent / "jobs.db")
+
+
+def _is_reversible_operator_note(note: object) -> bool:
+    text = str(note or "")
+    return text in {
+        "Operator kept source text.",
+        "Operator edited translation.",
+        "Operator accepted translation.",
+    } or text.startswith(("Fragment poprawiony przez użytkownika:", "User-refined fragment:"))
+
+
+def _undo_operator_decisions(state: dict) -> dict:
+    decisions = state.get("operator_decisions", {}) or {}
+    if not decisions:
+        return state
+
+    config = _coerce_job_config(state["config"])
+    decision_ids = {str(segment_id) for segment_id in decisions}
+    segments_by_id = {segment.segment_id: segment for segment in state.get("segments", [])}
+    translations = dict(state.get("translations", {}))
+
+    for segment_id in decision_ids:
+        translation = translations.get(segment_id)
+        if not translation:
+            continue
+
+        translations[segment_id] = translation.model_copy(
+            update={
+                "translator_notes": [
+                    note for note in translation.translator_notes if not _is_reversible_operator_note(note)
+                ],
+                "confidence": "medium",
+            }
+        )
+
+    unresolved_segments = set(state.get("unresolved_segments", []))
+    unresolved_segments.update(segment_id for segment_id in decision_ids if segment_id in segments_by_id)
+    restored_unresolved = sorted(
+        unresolved_segments,
+        key=lambda segment_id: segments_by_id.get(segment_id).order_index if segment_id in segments_by_id else 10**9,
+    )
+
+    restored_state = {
+        **state,
+        "config": config,
+        "translations": translations,
+        "unresolved_segments": restored_unresolved,
+        "operator_decisions": {},
+        "output_pdf_path": None,
+        "output_verification": None,
+        "report_path": None,
+        "status": "needs_human_review",
+    }
+    _job_store_for_config(config).save_state(restored_state)
+    return restored_state
+
+
+def _clear_operator_decision_widget_state(segment_ids: set[str]) -> None:
+    for segment_id in segment_ids:
+        for prefix in ("review_action_v2", "action"):
+            st.session_state.pop(f"{prefix}_{segment_id}", None)
+
+
+def _render_undo_operator_decisions_action(state: dict) -> None:
+    decisions = state.get("operator_decisions", {}) or {}
+    if not decisions:
+        return
+
+    decision_ids = {str(segment_id) for segment_id in decisions}
+    with st.container(border=True):
+        st.warning(_t("undo_operator_decisions_warning", count=len(decision_ids)))
+        if st.button(
+            _t("undo_operator_decisions"),
+            icon=":material/undo:",
+            help=_t("undo_operator_decisions_help"),
+            key=f"undo_operator_decisions_{state.get('job_id', 'current')}",
+        ):
+            restored_state = _undo_operator_decisions(state)
+            _clear_operator_decision_widget_state(decision_ids)
+            st.session_state["translation_state"] = restored_state
+            st.session_state["loaded_checkpoint_job_id"] = None
+            st.success(_t("operator_decisions_undone"))
+            st.rerun()
+
+
 def _render_human_review(state: dict) -> None:
     unresolved_segments = state.get("unresolved_segments", [])
     if not unresolved_segments:
@@ -2506,14 +2611,15 @@ def _render_human_review(state: dict) -> None:
 
             action = st.segmented_control(
                 _t("decision"),
-                ["edit", "accept", "keep_source"],
-                default="edit",
+                ["skip", "edit", "accept", "keep_source"],
+                default="skip",
                 format_func={
+                    "skip": _t("action_skip"),
                     "edit": _t("action_edit"),
                     "accept": _t("action_accept"),
                     "keep_source": _t("action_keep_source"),
                 }.get,
-                key=f"action_{segment_id}",
+                key=f"review_action_v2_{segment_id}",
             )
 
             if issues:
@@ -2521,14 +2627,23 @@ def _render_human_review(state: dict) -> None:
                 for issue in issues:
                     st.warning(_issue_label(issue))
 
-            decisions[segment_id] = {
-                "action": action or "edit",
-                "text": edited,
-                "note": _operator_refinement_note(segment_id),
-            }
+            decision = build_selected_operator_decision(
+                action=action,
+                edited_text=edited,
+                original_text=translation.translated_text,
+                note=_operator_refinement_note(segment_id),
+            )
+            if decision is not None:
+                decisions[segment_id] = decision
 
+    st.caption(_t("save_decisions_hint"))
+    st.caption(_t("selected_decisions", count=len(decisions)))
     with st.container(horizontal=True):
         if st.button(_t("save_decisions"), type="primary", icon=":material/save:"):
+            if not decisions:
+                st.warning(_t("no_selected_decisions"))
+                return
+
             _store_operator_phrase_memory_for_decisions(state, decisions)
             status = st.status(_t("saving_decisions"), expanded=True)
             progress_bar = status.progress(0, text=_t("rendering_start"))
@@ -2777,6 +2892,7 @@ if state:
     if st.session_state.get("loaded_checkpoint_job_id") == state.get("job_id"):
         st.info(_t("loaded_checkpoint", job_id=state.get("job_id"), status=state.get("status", "unknown")))
     _render_status(state)
+    _render_undo_operator_decisions_action(state)
     _render_checkpoint_resume(state)
     _render_translation_preview(state)
     _render_human_review(state)
