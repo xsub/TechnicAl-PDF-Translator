@@ -1,5 +1,9 @@
 # TechnicAl PDF Translator
 
+<p align="center">
+  <img src="docs/assets/puffy-clouds-logo-150.png" alt="Puffy Clouds" width="150">
+</p>
+
 [![Tests](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml/badge.svg)](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml)
 
 Cross-language tech PDF translator for audited, human-in-the-loop translation of technical documents.
