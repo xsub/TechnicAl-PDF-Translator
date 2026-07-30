@@ -145,6 +145,8 @@ class JobConfig(BaseModel):
     glossary_path: str = "translator/domain/glossary.yaml"
     require_human_review: bool = True
     max_revision_attempts: int = 1
+    translation_concurrency: int = Field(default=4, ge=1, le=16)
+    review_concurrency: int = Field(default=4, ge=1, le=16)
     debug: bool = False
     job_id: str | None = None
 

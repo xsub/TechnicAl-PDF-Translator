@@ -65,6 +65,10 @@ UI_TEXT = {
         "mode": "Tryb",
         "translator": "Tłumacz",
         "reviewer": "Recenzent",
+        "parallelism": "Równoległość",
+        "translation_concurrency": "Tłumaczenie",
+        "review_concurrency": "Review",
+        "concurrency_help": "Ile requestów LLM wysyłać naraz. Wyższa wartość zwykle przyspiesza długi PDF, ale może trafić w limity API.",
         "require_human_review": "Zatrzymaj przy istotnych problemach",
         "debug": "Tryb debug - logi w terminalu",
         "debug_help": "Wypisuje do konsoli każdy etap, segment, request LLM, czas trwania i błędy. Nie loguje kluczy API.",
@@ -83,6 +87,7 @@ UI_TEXT = {
         "status": "Status",
         "translator_provider": "tłumacz",
         "review_provider": "review",
+        "parallelism_status": "parallel",
         "source_to_target": "języki",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segmenty",
@@ -100,7 +105,9 @@ UI_TEXT = {
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokeny pojawią się po zakończeniu pierwszego realnego requestu LLM. Cache i mock nie doliczają tokenów.",
         "llm_inflight": "Request LLM w toku: `{operation}` dla segmentu `{segment_id}` (`{provider}` `{model}`). Tokeny zaktualizują się po odpowiedzi providera.",
+        "llm_inflight_many": "Requesty LLM w toku: `{active}` (`{operation}`, `{provider}` `{model}`), segmenty: {segments}. Tokeny zaktualizują się po odpowiedziach providera.",
         "llm_request_inflight_delta": "+1 w toku",
+        "llm_requests_inflight_delta": "+{active} w toku",
         "estimated_input_delta": "+~{tokens} input w toku",
         "estimated_total_delta": "+~{tokens} szac. w toku",
         "estimated_token_note": "Wartość w toku jest lokalnym szacunkiem input promptu. Finalne input/output/total po odpowiedzi podaje provider.",
@@ -189,6 +196,10 @@ UI_TEXT = {
         "mode": "Mode",
         "translator": "Translator",
         "reviewer": "Reviewer",
+        "parallelism": "Parallelism",
+        "translation_concurrency": "Translation",
+        "review_concurrency": "Review",
+        "concurrency_help": "How many LLM requests to send at the same time. Higher values usually speed up long PDFs, but may hit API limits.",
         "require_human_review": "Stop on material issues",
         "debug": "Debug mode - terminal logs",
         "debug_help": "Prints every stage, segment, LLM request, duration and error to the console. API keys are not logged.",
@@ -207,6 +218,7 @@ UI_TEXT = {
         "status": "Status",
         "translator_provider": "translator",
         "review_provider": "review",
+        "parallelism_status": "parallel",
         "source_to_target": "languages",
         "debug_log": "Debug log: `{path}`",
         "segments_metric": "Segments",
@@ -224,7 +236,9 @@ UI_TEXT = {
         "total_tokens_metric": "Total tokens",
         "no_token_usage_yet": "Tokens will appear after the first real LLM request finishes. Cache and mock do not add tokens.",
         "llm_inflight": "LLM request in progress: `{operation}` for segment `{segment_id}` (`{provider}` `{model}`). Token usage will update after the provider responds.",
+        "llm_inflight_many": "LLM requests in progress: `{active}` (`{operation}`, `{provider}` `{model}`), segments: {segments}. Token usage will update after provider responses.",
         "llm_request_inflight_delta": "+1 in flight",
+        "llm_requests_inflight_delta": "+{active} in flight",
         "estimated_input_delta": "+~{tokens} input in flight",
         "estimated_total_delta": "+~{tokens} est. in flight",
         "estimated_token_note": "The in-flight value is a local input-prompt estimate. Final input/output/total comes from the provider response.",
@@ -330,10 +344,12 @@ def _progress_message(raw_message: str) -> str:
         "Używam zapisanego tłumaczenia identycznego segmentu": "Reusing an identical segment translation",
         "Używam trwałego cache tłumaczenia": "Using persistent translation cache",
         "Tłumaczę segment": "Translating segment",
+        "Tłumaczę segmenty równolegle": "Translating segments in parallel",
         "Segment przetłumaczony": "Segment translated",
         "Sprawdzam liczby, jednostki i odnośniki": "Checking numbers, units and references",
         "Pomijam segment już zrecenzowany w checkpoincie": "Skipping segment already reviewed in checkpoint",
         "Recenzuję segment": "Reviewing segment",
+        "Recenzuję segmenty równolegle": "Reviewing segments in parallel",
         "Segment po review": "Segment reviewed",
         "Rozstrzygam problemy i routing": "Resolving issues and routing",
         "Poprawiam zakwestionowany segment": "Revising flagged segment",
@@ -517,7 +533,14 @@ def _render_token_usage_metrics(state: dict) -> None:
     inflight = state.get("llm_inflight")
     inflight = inflight if isinstance(inflight, dict) else None
     estimated_input_tokens = _safe_int(inflight.get("estimated_input_tokens")) if inflight else 0
-    request_delta = _t("llm_request_inflight_delta") if inflight else None
+    active_requests = _safe_int(inflight.get("active")) if inflight else 0
+    if inflight and active_requests <= 0:
+        active_requests = 1
+    request_delta = None
+    if active_requests == 1:
+        request_delta = _t("llm_request_inflight_delta")
+    elif active_requests > 1:
+        request_delta = _t("llm_requests_inflight_delta", active=active_requests)
     input_delta = (
         _t("estimated_input_delta", tokens=f"{estimated_input_tokens:,}")
         if estimated_input_tokens
@@ -551,15 +574,27 @@ def _render_token_usage_metrics(state: dict) -> None:
         delta_color="off",
     )
     if inflight:
-        st.caption(
-            _t(
-                "llm_inflight",
-                operation=inflight.get("operation", "llm"),
-                provider=inflight.get("provider", "-"),
-                model=inflight.get("model", "-"),
-                segment_id=inflight.get("segment_id", "-"),
+        if active_requests > 1:
+            st.caption(
+                _t(
+                    "llm_inflight_many",
+                    active=active_requests,
+                    operation=inflight.get("operation", "llm"),
+                    provider=inflight.get("provider", "-"),
+                    model=inflight.get("model", "-"),
+                    segments=_inflight_segments_label(inflight),
+                )
             )
-        )
+        else:
+            st.caption(
+                _t(
+                    "llm_inflight",
+                    operation=inflight.get("operation", "llm"),
+                    provider=inflight.get("provider", "-"),
+                    model=inflight.get("model", "-"),
+                    segment_id=inflight.get("segment_id", "-"),
+                )
+            )
         if estimated_input_tokens:
             st.caption(_t("estimated_token_note"))
     elif usage["requests"] == 0:
@@ -576,6 +611,23 @@ def _safe_int(value: object) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return 0
+
+
+def _inflight_segments_label(inflight: dict) -> str:
+    segments = inflight.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return str(inflight.get("segment_id", "-"))
+
+    labels = []
+    for item in segments[:6]:
+        if isinstance(item, dict):
+            labels.append(str(item.get("segment_id", "-")))
+        else:
+            labels.append(str(item))
+
+    remaining = len(segments) - len(labels)
+    suffix = f" +{remaining}" if remaining > 0 else ""
+    return ", ".join(labels) + suffix
 
 
 def _status_update(status, *, label: str, state: str | None = None) -> None:
@@ -680,6 +732,8 @@ def _run_translation(
     mode: str,
     translator_provider: str,
     reviewer_provider: str,
+    translation_concurrency: int,
+    review_concurrency: int,
     require_human_review: bool,
     debug: bool,
 ) -> None:
@@ -702,6 +756,8 @@ def _run_translation(
         translator_provider=translator_provider,  # type: ignore[arg-type]
         reviewer_provider=reviewer_provider,  # type: ignore[arg-type]
         require_human_review=require_human_review,
+        translation_concurrency=translation_concurrency,
+        review_concurrency=review_concurrency,
         debug=debug,
         job_id=job_id,
     )
@@ -762,6 +818,7 @@ def _render_status(state: dict) -> None:
             f" | {_t('source_to_target')}: `{config.source_language} -> {config.target_language}`"
             f" | {_t('translator_provider')}: `{config.translator_provider}`, "
             f"{_t('review_provider')}: `{config.reviewer_provider}`"
+            f" | {_t('parallelism_status')}: `{config.translation_concurrency}/{config.review_concurrency}`"
         )
 
     st.subheader(_t("status"))
@@ -1262,6 +1319,23 @@ with st.sidebar:
         key="reviewer_provider",
         width="stretch",
     )
+    st.subheader(_t("parallelism"))
+    translation_concurrency = st.slider(
+        _t("translation_concurrency"),
+        min_value=1,
+        max_value=12,
+        value=4,
+        help=_t("concurrency_help"),
+        key="translation_concurrency",
+    )
+    review_concurrency = st.slider(
+        _t("review_concurrency"),
+        min_value=1,
+        max_value=12,
+        value=4,
+        help=_t("concurrency_help"),
+        key="review_concurrency",
+    )
     require_human_review = st.toggle(_t("require_human_review"), value=True, key="require_human_review")
     debug = st.toggle(
         _t("debug"),
@@ -1291,6 +1365,8 @@ if submitted:
             mode or "standard",
             translator_provider or "mock",
             reviewer_provider or "mock",
+            translation_concurrency,
+            review_concurrency,
             require_human_review,
             debug,
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 import time
 
 from translator.debug import log_debug, text_preview
@@ -16,6 +18,13 @@ from translator.translation_cache import TranslationCache, copy_translation_from
 
 
 TranslationMemory = dict[str, tuple[str, TranslationResult]]
+
+
+@dataclass
+class PendingTranslationGroup:
+    segment: DocumentSegment
+    duplicates: list[DocumentSegment]
+    estimated_input_tokens: int = 0
 
 
 def translate_segments(
@@ -35,6 +44,9 @@ def translate_segments(
     persistent_cache_hits = int(state.get("persistent_translation_cache_hits", 0))
     memory_misses = int(state.get("translation_memory_misses", 0))
     cache_scope = state.get("translation_cache_scope") or translation_cache.scope
+
+    pending_by_key: dict[str, PendingTranslationGroup] = {}
+    pending_groups: list[PendingTranslationGroup] = []
 
     for index, segment in enumerate(segments, start=1):
         if segment.segment_id in translations:
@@ -137,76 +149,179 @@ def translate_segments(
             )
             continue
 
+        group_key = memory_key or f"segment:{segment.segment_id}"
+        if group_key in pending_by_key:
+            pending_by_key[group_key].duplicates.append(segment)
+            continue
+
+        group = PendingTranslationGroup(segment=segment, duplicates=[])
+        pending_by_key[group_key] = group
+        pending_groups.append(group)
+
+    if pending_groups:
         if client is None:
             client = build_translator(config)
-        llm_inflight = None
-        if config.translator_provider != "mock":
-            llm_inflight = {
-                "operation": "translate",
-                "provider": config.translator_provider,
-                "model": getattr(client, "model_name", config.translator_provider),
-                "segment_id": segment.segment_id,
-                "index": index,
-                "total": total,
-                "estimated_input_tokens": estimate_translation_request_tokens(segment, glossary, config),
-            }
-        if checkpoint_callback:
-            checkpoint_callback(
-                {
-                    **state,
-                    "translations": translations,
-                    "translation_memory_hits": memory_hits,
-                    "persistent_translation_cache_hits": persistent_cache_hits,
-                    "translation_memory_misses": memory_misses,
-                    "translation_cache_scope": cache_scope,
-                    "llm_inflight": llm_inflight,
-                    "status": f"translating {index}/{total}",
-                }
-            )
-        emit_progress(
-            progress_callback,
-            stage="translate",
-            message="Tłumaczę segment",
-            current=index,
-            total=total,
-            segment_id=segment.segment_id,
-        )
-        translations[segment.segment_id] = client.translate(segment, glossary, config)
-        translation = translations[segment.segment_id]
-        memory_misses += 1
-        if memory_key:
-            memory.setdefault(memory_key, (segment.segment_id, translation))
-        translation_cache.store(segment, translation, job_id=state["job_id"])
-        partial_state = {
-            **state,
-            "translations": translations,
-            "translation_memory_hits": memory_hits,
-            "persistent_translation_cache_hits": persistent_cache_hits,
-            "translation_memory_misses": memory_misses,
-            "translation_cache_scope": cache_scope,
-            "llm_inflight": None,
-            "status": f"translating {index}/{total}",
-        }
-        if checkpoint_callback:
-            checkpoint_callback(partial_state)
+        concurrency = _concurrency_limit(config.translation_concurrency, len(pending_groups))
+        model_name = getattr(client, "model_name", config.translator_provider)
         log_debug(
-            "segment.translate.done",
-            segment_id=segment.segment_id,
-            index=index,
-            total=total,
-            duration_s=round(time.perf_counter() - started_at, 3),
-            translated_chars=len(translation.translated_text),
-            confidence=translation.confidence,
-            uncertain_terms=translation.uncertain_terms,
-            translated_preview=text_preview(translation.translated_text),
+            "segments.translate.parallel.start",
+            pending_groups=len(pending_groups),
+            concurrency=concurrency,
+            provider=config.translator_provider,
+            model=model_name,
         )
-        emit_progress(
-            progress_callback,
-            stage="translate",
-            message="Segment przetłumaczony",
-            current=index,
-            total=total,
-            segment_id=segment.segment_id,
+
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="translate") as executor:
+            pending_iter = iter(pending_groups)
+            active: dict[Future[TranslationResult], PendingTranslationGroup] = {}
+
+            def submit_next() -> bool:
+                try:
+                    group = next(pending_iter)
+                except StopIteration:
+                    return False
+
+                group.estimated_input_tokens = (
+                    estimate_translation_request_tokens(group.segment, glossary, config)
+                    if config.translator_provider != "mock"
+                    else 0
+                )
+                log_debug(
+                    "segment.translate.request_start",
+                    segment_id=group.segment.segment_id,
+                    total=total,
+                    page_number=group.segment.page_number,
+                    block_type=group.segment.block_type,
+                    source_chars=len(group.segment.source_text),
+                    protected_tokens=len(group.segment.protected_tokens),
+                    duplicate_segments=len(group.duplicates),
+                    source_preview=text_preview(group.segment.source_text),
+                )
+                future = executor.submit(client.translate, group.segment, glossary, config)
+                active[future] = group
+                return True
+
+            for _ in range(concurrency):
+                if not submit_next():
+                    break
+
+            if checkpoint_callback:
+                checkpoint_callback(
+                    _partial_translation_state(
+                        state,
+                        translations,
+                        memory_hits,
+                        persistent_cache_hits,
+                        memory_misses,
+                        cache_scope,
+                        _inflight_state(
+                            active.values(),
+                            operation="translate",
+                            provider=config.translator_provider,
+                            model=model_name,
+                        ),
+                        total,
+                    )
+                )
+            emit_progress(
+                progress_callback,
+                stage="translate",
+                message="Tłumaczę segmenty równolegle",
+                current=len(translations),
+                total=total,
+            )
+
+            while active:
+                for future in as_completed(list(active.keys())):
+                    group = active.pop(future)
+                    segment = group.segment
+                    try:
+                        translation = future.result()
+                    except Exception:
+                        if checkpoint_callback:
+                            checkpoint_callback(
+                                _partial_translation_state(
+                                    state,
+                                    translations,
+                                    memory_hits,
+                                    persistent_cache_hits,
+                                    memory_misses,
+                                    cache_scope,
+                                    None,
+                                    total,
+                                )
+                            )
+                        raise
+                    translations[segment.segment_id] = translation
+                    memory_misses += 1
+
+                    memory_key = normalize_translation_source(segment.source_text)
+                    if memory_key:
+                        memory.setdefault(memory_key, (segment.segment_id, translation))
+                    translation_cache.store(segment, translation, job_id=state["job_id"])
+
+                    for duplicate in group.duplicates:
+                        translations[duplicate.segment_id] = copy_translation_from_cache(
+                            duplicate,
+                            translation,
+                            source_label=f"segment {segment.segment_id}",
+                        )
+                        memory_hits += 1
+
+                    submit_next()
+
+                    partial_state = _partial_translation_state(
+                        state,
+                        translations,
+                        memory_hits,
+                        persistent_cache_hits,
+                        memory_misses,
+                        cache_scope,
+                        _inflight_state(
+                            active.values(),
+                            operation="translate",
+                            provider=config.translator_provider,
+                            model=model_name,
+                        ),
+                        total,
+                    )
+                    if checkpoint_callback:
+                        checkpoint_callback(partial_state)
+                    log_debug(
+                        "segment.translate.done",
+                        segment_id=segment.segment_id,
+                        total=total,
+                        translated_chars=len(translation.translated_text),
+                        confidence=translation.confidence,
+                        uncertain_terms=translation.uncertain_terms,
+                        duplicate_segments=len(group.duplicates),
+                        translated_preview=text_preview(translation.translated_text),
+                    )
+                    emit_progress(
+                        progress_callback,
+                        stage="translate",
+                        message="Segment przetłumaczony",
+                        current=len(translations),
+                        total=total,
+                        segment_id=segment.segment_id,
+                    )
+                    for duplicate in group.duplicates:
+                        emit_progress(
+                            progress_callback,
+                            stage="translate",
+                            message="Używam zapisanego tłumaczenia identycznego segmentu",
+                            current=len(translations),
+                            total=total,
+                            segment_id=duplicate.segment_id,
+                        )
+                    break
+
+        log_debug(
+            "segments.translate.parallel.done",
+            translations=len(translations),
+            memory_hits=memory_hits,
+            persistent_cache_hits=persistent_cache_hits,
+            memory_misses=memory_misses,
         )
 
     return {
@@ -322,3 +437,63 @@ def _build_translation_memory(
             memory.setdefault(key, (segment.segment_id, translation))
 
     return memory
+
+
+def _partial_translation_state(
+    state: TranslationState,
+    translations: dict[str, TranslationResult],
+    memory_hits: int,
+    persistent_cache_hits: int,
+    memory_misses: int,
+    cache_scope: dict,
+    llm_inflight: dict | None,
+    total: int,
+) -> dict:
+    return {
+        **state,
+        "translations": translations,
+        "translation_memory_hits": memory_hits,
+        "persistent_translation_cache_hits": persistent_cache_hits,
+        "translation_memory_misses": memory_misses,
+        "translation_cache_scope": cache_scope,
+        "llm_inflight": llm_inflight,
+        "status": f"translating {len(translations)}/{total}",
+    }
+
+
+def _inflight_state(
+    groups: object,
+    *,
+    operation: str,
+    provider: str,
+    model: str,
+) -> dict | None:
+    if provider == "mock":
+        return None
+
+    group_list = list(groups)  # type: ignore[arg-type]
+    if not group_list:
+        return None
+
+    requests = [
+        {
+            "segment_id": group.segment.segment_id,
+            "estimated_input_tokens": group.estimated_input_tokens,
+        }
+        for group in group_list
+    ]
+    return {
+        "operation": operation,
+        "provider": provider,
+        "model": model,
+        "active": len(requests),
+        "segment_id": requests[0]["segment_id"],
+        "segments": requests,
+        "estimated_input_tokens": sum(int(request["estimated_input_tokens"] or 0) for request in requests),
+    }
+
+
+def _concurrency_limit(configured: int, total: int) -> int:
+    if total <= 0:
+        return 1
+    return max(1, min(int(configured or 1), total))
