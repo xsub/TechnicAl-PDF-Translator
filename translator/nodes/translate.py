@@ -6,8 +6,11 @@ from translator.debug import log_debug, text_preview
 from translator.domain.glossary import load_glossary
 from translator.llm.clients import build_translator
 from translator.progress import CheckpointCallback, ProgressCallback, emit_progress
-from translator.schemas import ReviewFinding
+from translator.schemas import DocumentSegment, ReviewFinding, TranslationResult
 from translator.state import TranslationState
+
+
+TranslationMemory = dict[str, tuple[str, TranslationResult]]
 
 
 def translate_segments(
@@ -17,10 +20,13 @@ def translate_segments(
 ) -> TranslationState:
     config = state["config"]
     glossary = load_glossary(config.glossary_path)
-    client = build_translator(config)
+    client = None
     translations = dict(state.get("translations", {}))
     segments = state.get("segments", [])
     total = len(segments)
+    memory = _build_translation_memory(segments, translations)
+    memory_hits = int(state.get("translation_memory_hits", 0))
+    memory_misses = int(state.get("translation_memory_misses", 0))
 
     for index, segment in enumerate(segments, start=1):
         if segment.segment_id in translations:
@@ -34,6 +40,7 @@ def translate_segments(
             )
             continue
         started_at = time.perf_counter()
+        memory_key = _translation_memory_key(segment.source_text)
         log_debug(
             "segment.translate.start",
             segment_id=segment.segment_id,
@@ -45,6 +52,44 @@ def translate_segments(
             protected_tokens=len(segment.protected_tokens),
             source_preview=text_preview(segment.source_text),
         )
+        if memory_key and memory_key in memory:
+            source_segment_id, cached_translation = memory[memory_key]
+            translations[segment.segment_id] = _copy_translation_from_memory(
+                segment,
+                cached_translation,
+                source_segment_id=source_segment_id,
+            )
+            translation = translations[segment.segment_id]
+            memory_hits += 1
+            partial_state = {
+                **state,
+                "translations": translations,
+                "translation_memory_hits": memory_hits,
+                "translation_memory_misses": memory_misses,
+                "status": f"translating {index}/{total}",
+            }
+            if checkpoint_callback:
+                checkpoint_callback(partial_state)
+            log_debug(
+                "segment.translate.memory_hit",
+                segment_id=segment.segment_id,
+                source_segment_id=source_segment_id,
+                index=index,
+                total=total,
+                duration_s=round(time.perf_counter() - started_at, 3),
+                translated_chars=len(translation.translated_text),
+                translated_preview=text_preview(translation.translated_text),
+            )
+            emit_progress(
+                progress_callback,
+                stage="translate",
+                message="Używam zapisanego tłumaczenia identycznego segmentu",
+                current=index,
+                total=total,
+                segment_id=segment.segment_id,
+            )
+            continue
+
         emit_progress(
             progress_callback,
             stage="translate",
@@ -53,11 +98,18 @@ def translate_segments(
             total=total,
             segment_id=segment.segment_id,
         )
+        if client is None:
+            client = build_translator(config)
         translations[segment.segment_id] = client.translate(segment, glossary, config)
         translation = translations[segment.segment_id]
+        memory_misses += 1
+        if memory_key:
+            memory.setdefault(memory_key, (segment.segment_id, translation))
         partial_state = {
             **state,
             "translations": translations,
+            "translation_memory_hits": memory_hits,
+            "translation_memory_misses": memory_misses,
             "status": f"translating {index}/{total}",
         }
         if checkpoint_callback:
@@ -82,7 +134,13 @@ def translate_segments(
             segment_id=segment.segment_id,
         )
 
-    return {**state, "translations": translations, "status": "segments_translated"}
+    return {
+        **state,
+        "translations": translations,
+        "translation_memory_hits": memory_hits,
+        "translation_memory_misses": memory_misses,
+        "status": "segments_translated",
+    }
 
 
 def revise_flagged_segments(
@@ -146,3 +204,43 @@ def revise_flagged_segments(
         "revision_required_segments": [],
         "status": "flagged_segments_revised",
     }
+
+
+def _build_translation_memory(
+    segments: list[DocumentSegment],
+    translations: dict[str, TranslationResult],
+) -> TranslationMemory:
+    memory: TranslationMemory = {}
+    for segment in segments:
+        translation = translations.get(segment.segment_id)
+        if not translation:
+            continue
+
+        key = _translation_memory_key(segment.source_text)
+        if key:
+            memory.setdefault(key, (segment.segment_id, translation))
+
+    return memory
+
+
+def _translation_memory_key(source_text: str) -> str:
+    return " ".join(source_text.split())
+
+
+def _copy_translation_from_memory(
+    segment: DocumentSegment,
+    cached_translation: TranslationResult,
+    *,
+    source_segment_id: str,
+) -> TranslationResult:
+    note = f"Reused exact-match translation from segment {source_segment_id}."
+    notes = list(cached_translation.translator_notes)
+    if note not in notes:
+        notes.append(note)
+
+    return cached_translation.model_copy(
+        update={
+            "segment_id": segment.segment_id,
+            "translator_notes": notes,
+        }
+    )

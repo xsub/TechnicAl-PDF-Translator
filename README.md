@@ -17,6 +17,7 @@ Panel pokazuje checkpoint joba, debug/status bieżącego segmentu oraz podgląd 
 - tłumacza i recenzenta w trybie `mock`, żeby demo działało bez kluczy API,
 - wybór języka UI: PL/EN,
 - wybór języka tłumaczenia z/do z przeszukiwalnej listy i możliwością wpisania własnego języka,
+- translation memory w obrębie joba: identyczne segmenty są brane z checkpointu zamiast ponownie wysyłane do LLM,
 - adapter OpenAI dla tłumaczenia i adapter Anthropic/OpenAI dla review,
 - prosty workflow z opcjonalnym LangGraph,
 - Streamlit UI z ekranem problemów i decyzji operatora,
@@ -105,6 +106,8 @@ ANTHROPIC_REVIEW_MODEL=claude-sonnet-4-5
 MVP generuje nowy PDF zachowujący strukturę dokumentu, ale nie próbuje odtworzyć oryginalnego layoutu piksel po pikselu. To świadoma decyzja: tłumaczenia bywają dłuższe lub krótsze od oryginału, więc identyczny layout i brak skracania tekstu są w praktyce sprzecznymi wymaganiami.
 
 Glossary domenowy jest obecnie polski. Gdy język docelowy to Polish/Polski/pl, zatwierdzone polskie terminy są walidowane jako wymagane. Przy innych językach glossary służy jako kotwica znaczeniowa dla modelu, ale walidator nie wymusza polskich odpowiedników.
+
+Translation memory działa ostrożnie: używa wyłącznie dokładnego dopasowania segmentu po normalizacji białych znaków. Nie robi fuzzy matchingu ani „podobnych zdań”, bo w dokumentach technicznych podobny fragment może znaczyć coś innego w innym kontekście.
 
 OCR, idealna rekonstrukcja układu, RAG i dwa pełne niezależne tłumaczenia są poza pierwszym MVP.
 

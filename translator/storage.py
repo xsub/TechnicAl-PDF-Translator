@@ -193,6 +193,8 @@ def build_report(state: TranslationState, report_path: str | Path | None = None)
         "critical_or_major_review_findings": sum(
             1 for finding in review_findings if finding.severity in {"critical", "major"}
         ),
+        "translation_memory_hits": state.get("translation_memory_hits", 0),
+        "translation_memory_misses": state.get("translation_memory_misses", 0),
     }
     return JobReport(
         job_id=state["job_id"],

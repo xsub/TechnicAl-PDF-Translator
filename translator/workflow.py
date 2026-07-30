@@ -204,6 +204,8 @@ def _initial_state(config: JobConfig) -> TranslationState:
         "unresolved_segments": [],
         "revision_required_segments": [],
         "revision_attempts": {},
+        "translation_memory_hits": 0,
+        "translation_memory_misses": 0,
         "operator_decisions": {},
         "output_pdf_path": None,
         "output_verification": None,
