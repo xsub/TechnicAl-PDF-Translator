@@ -1,31 +1,38 @@
-# Technical PDF Translator MVP
+# TechnicAl PDF Translator
 
-To jest minimalny, audytowalny workflow do tłumaczenia technicznych PDF-ów między wybranymi językami. Domyślny kierunek to English → Polish, ale UI pozwala wybrać dowolny język źródłowy i docelowy z długiej przeszukiwalnej listy albo wpisać własny. Projekt jest celowo bardziej „pipeline” niż autonomiczny agent: LLM tłumaczy znaczenie, kod pilnuje liczb/jednostek/odnośników, drugi model pełni rolę recenzenta, a operator zatwierdza tylko sporne fragmenty.
+[![Tests](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml/badge.svg)](https://github.com/xsub/TechnicAl-PDF-Translator/actions/workflows/tests.yml)
 
-## Podgląd aplikacji
+Cross-language tech PDF translator for audited, human-in-the-loop translation of technical documents.
 
-![Podgląd na żywo tłumaczenia w Streamlit](docs/assets/live-translation-preview.png)
+TechnicAl is a minimal document workflow for translating technical PDFs between arbitrary source and target languages. The default setup is English → Polish, but the UI supports a long searchable language list and custom language names. The project is intentionally more of a controlled pipeline than a fully autonomous agent: the LLM translates meaning, deterministic code protects numbers and identifiers, a second model reviews the output, and the operator resolves only the fragments that need human judgment.
 
-Panel pokazuje checkpoint joba, debug/status bieżącego segmentu oraz podgląd na żywo tłumaczeń zapisanych lokalnie w SQLite.
+#AI #PDF #TechnicalTranslation #Streamlit #LangGraph #OpenAI #Anthropic #HumanInTheLoop #TranslationMemory #DocumentAutomation
 
-## Co zawiera MVP
+## App preview
 
-- ekstrakcję cyfrowych PDF-ów bez OCR,
-- segmentację tekstu i prostych tabel,
-- glossary domenowy w `translator/domain/glossary.yaml`,
-- ochronę liczb, jednostek, operatorów, CAS, norm i skrótów laboratoryjnych,
-- tłumacza i recenzenta w trybie `mock`, żeby demo działało bez kluczy API,
-- wybór języka UI: PL/EN,
-- wybór języka tłumaczenia z/do z przeszukiwalnej listy i możliwością wpisania własnego języka,
-- translation memory w obrębie joba: identyczne segmenty są brane z checkpointu zamiast ponownie wysyłane do LLM,
-- adapter OpenAI dla tłumaczenia i adapter Anthropic/OpenAI dla review,
-- prosty workflow z opcjonalnym LangGraph,
-- Streamlit UI z ekranem problemów i decyzji operatora,
-- generowanie nowego, czystego PDF-a przez ReportLab,
-- walidację PDF-a wynikowego po ponownej ekstrakcji tekstu,
-- zapis raportu JSON i minimalny audyt w SQLite.
+![Live translation preview in Streamlit](docs/assets/live-translation-preview.png)
 
-## Szybki start
+The UI shows the current job checkpoint, debug/status feedback for the active segment, and a live preview of translations already saved to SQLite.
+
+## MVP features
+
+- digital PDF extraction without OCR,
+- segmentation of paragraphs and simple tables,
+- PL/EN UI language switch,
+- arbitrary source and target language selection from a searchable list, with custom language input,
+- domain glossary in `translator/domain/glossary.yaml`,
+- deterministic protection of numbers, units, comparators, CAS numbers, standards, regulations and lab abbreviations,
+- mock translator/reviewer mode for demos without API keys,
+- OpenAI adapter for real translation,
+- Anthropic or OpenAI adapter for independent review,
+- exact-match translation memory within the current job/checkpoint,
+- optional LangGraph workflow structure,
+- Streamlit UI for progress, live translation preview, issues and operator decisions,
+- output PDF generation with ReportLab,
+- output PDF verification by extracting the generated PDF text again,
+- JSON audit report and minimal SQLite job storage.
+
+## Quick start
 
 ```bash
 python -m venv .venv
@@ -33,13 +40,13 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-Uruchomienie UI:
+Run the UI:
 
 ```bash
 streamlit run app.py
 ```
 
-Uruchomienie z CLI w trybie demo/mock:
+Run the CLI in mock/demo mode:
 
 ```bash
 technical-pdf-translator path/to/input.pdf \
@@ -48,87 +55,90 @@ technical-pdf-translator path/to/input.pdf \
   --auto-accept-unresolved
 ```
 
-W trybie realnych modeli ustaw:
+For real model calls, create a local `.env` file or export:
 
 ```bash
-export OPENAI_API_KEY="..."
-export ANTHROPIC_API_KEY="..."
-export OPENAI_TRANSLATION_MODEL="gpt-5-mini"
-export ANTHROPIC_REVIEW_MODEL="claude-sonnet-4-5"
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+OPENAI_TRANSLATION_MODEL=gpt-5-mini
+OPENAI_REVIEW_MODEL=gpt-5-mini
+ANTHROPIC_REVIEW_MODEL=claude-sonnet-4-5
+TRANSLATOR_DEBUG=true
 ```
 
-Następnie w UI wybierz `openai` jako tłumacza i `anthropic` jako recenzenta.
+Then choose `OpenAI` as translator and `Anthropic` or `OpenAI` as reviewer in the UI.
 
 ## Docker
 
-Obraz nie kopiuje `.env` ani lokalnego `storage/` do środka. Klucze podaj przez `--env-file`, a checkpointy/PDF-y trzymaj w zamontowanym katalogu:
+The image does not copy `.env` or local `storage/` into the container. Pass secrets through `--env-file` and mount `storage/` for uploaded PDFs, checkpoints and outputs:
 
 ```bash
-docker build -t tech-translator-agent .
+docker build -t technical-pdf-translator .
 mkdir -p storage
 docker run --rm \
   --env-file .env \
   -p 8501:8501 \
   -v "$PWD/storage:/app/storage" \
-  tech-translator-agent
+  technical-pdf-translator
 ```
 
-Potem otwórz:
+Open:
 
 ```text
 http://localhost:8501
 ```
 
-Jeżeli budujesz przez Podmana i chcesz, żeby `HEALTHCHECK` został zapisany w obrazie, użyj formatu Docker:
+If you build with Podman and want the `HEALTHCHECK` preserved in the image metadata, use Docker format:
 
 ```bash
-podman build --format docker -t tech-translator-agent .
+podman build --format docker -t technical-pdf-translator .
 ```
 
-Minimalny `.env` dla realnego tłumaczenia:
+## GitHub CI
+
+This repository includes GitHub Actions testing in `.github/workflows/tests.yml`.
+
+The CI workflow runs on pushes to `main` and pull requests:
 
 ```bash
-OPENAI_API_KEY=...
-OPENAI_TRANSLATION_MODEL=gpt-5-mini
-OPENAI_REVIEW_MODEL=gpt-5-mini
-TRANSLATOR_DEBUG=true
+python -m compileall app.py translator tests
+python -m unittest
 ```
 
-Jeżeli chcesz używać Anthropica jako recenzenta, dodaj:
+The tests use only local PDF/Pydantic dependencies and do not require API keys.
 
-```bash
-ANTHROPIC_API_KEY=...
-ANTHROPIC_REVIEW_MODEL=claude-sonnet-4-5
-```
+## Design notes
 
-## Założenia MVP
+TechnicAl generates a new PDF that preserves the document structure, but it does not try to reproduce the original layout pixel-for-pixel. This is deliberate: translated text can be longer or shorter than the source, so identical layout and no text compression are often conflicting requirements.
 
-MVP generuje nowy PDF zachowujący strukturę dokumentu, ale nie próbuje odtworzyć oryginalnego layoutu piksel po pikselu. To świadoma decyzja: tłumaczenia bywają dłuższe lub krótsze od oryginału, więc identyczny layout i brak skracania tekstu są w praktyce sprzecznymi wymaganiami.
+The current domain glossary is Polish-oriented. When the target language is Polish/Polski/pl, approved Polish terms are validated as required. For other target languages, the glossary acts as a domain concept anchor for the model, but the deterministic validator does not force Polish equivalents.
 
-Glossary domenowy jest obecnie polski. Gdy język docelowy to Polish/Polski/pl, zatwierdzone polskie terminy są walidowane jako wymagane. Przy innych językach glossary służy jako kotwica znaczeniowa dla modelu, ale walidator nie wymusza polskich odpowiedników.
+Translation memory is intentionally conservative. It only reuses exact source-segment matches after whitespace normalization. It does not do fuzzy matching or semantic similarity, because in technical documents a similar sentence can mean something different in a different context.
 
-Translation memory działa ostrożnie: używa wyłącznie dokładnego dopasowania segmentu po normalizacji białych znaków. Nie robi fuzzy matchingu ani „podobnych zdań”, bo w dokumentach technicznych podobny fragment może znaczyć coś innego w innym kontekście.
+Out of scope for the first MVP:
 
-OCR, idealna rekonstrukcja układu, RAG i dwa pełne niezależne tłumaczenia są poza pierwszym MVP.
+- full OCR pipeline,
+- pixel-perfect layout reconstruction,
+- RAG over historical documents,
+- two full independent translations of every segment,
+- fuzzy translation memory.
 
-## Struktura
+## Repository structure
 
 ```text
 translator/
-  graph.py                  # opcjonalna kompilacja LangGraph
-  workflow.py               # główny runner MVP
-  schemas.py                # Pydantic: segmenty, tłumaczenia, review, raporty
-  nodes/                    # kroki workflow
-  pdf/                      # parser, renderer, walidator PDF
-  llm/                      # mock + adaptery OpenAI/Anthropic
-  domain/                   # glossary, prompty, ochrona wartości
-  storage.py                # SQLite + raport JSON
+  graph.py                  # optional LangGraph compilation
+  workflow.py               # main MVP runner
+  schemas.py                # Pydantic schemas: segments, translations, reviews, reports
+  nodes/                    # workflow steps
+  pdf/                      # parser, renderer, output validator
+  llm/                      # mock + OpenAI/Anthropic adapters
+  domain/                   # glossary, prompts, protected value logic
+  storage.py                # SQLite + JSON report
 ```
 
-## Testy
+## Tests
 
 ```bash
 python -m unittest
 ```
-
-Testy używają tylko lokalnych zależności PDF/Pydantic i nie wymagają kluczy API.
