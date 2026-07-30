@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import re
 import tomllib
@@ -1066,15 +1067,27 @@ def _render_operator_phrase_refinement(
             )
 
         replace_col, phrase_col = st.columns(2)
-        replace_col.text_input(
+        replace_col.text_area(
             _t("operator_replace_from"),
             key=replace_key,
             placeholder=_t("operator_replace_placeholder"),
+            height=_wrapped_text_area_height(
+                st.session_state.get(replace_key, ""),
+                min_height=92,
+                max_height=220,
+                chars_per_line=70,
+            ),
         )
-        phrase_col.text_input(
+        phrase_col.text_area(
             _t("operator_preferred_phrase"),
             key=phrase_key,
             placeholder=_t("operator_preferred_placeholder"),
+            height=_wrapped_text_area_height(
+                st.session_state.get(phrase_key, ""),
+                min_height=92,
+                max_height=220,
+                chars_per_line=70,
+            ),
         )
 
         running_task = _operator_refinement_running(segment_id)
@@ -2067,28 +2080,20 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
         preview_height = _wrapped_text_area_height(
             last_segment.source_text,
             last_translation.translated_text,
-            min_height=160,
-            max_height=360,
+            min_height=120,
+            max_height=300,
         )
-        left.text_area(
+        _render_readable_text_box(
+            left,
             _t("source_segment_caption", segment_id=last_segment.segment_id, page_number=last_segment.page_number),
-            value=last_segment.source_text,
+            last_segment.source_text,
             height=preview_height,
-            disabled=True,
-            key=_unique_widget_key("live_source_text", state.get("job_id"), done, last_segment.segment_id),
         )
-        right.text_area(
+        _render_readable_text_box(
+            right,
             _t("saved_translation_caption"),
-            value=last_translation.translated_text,
+            last_translation.translated_text,
             height=preview_height,
-            disabled=True,
-            key=_unique_widget_key(
-                "live_translation_text",
-                state.get("job_id"),
-                done,
-                last_segment.segment_id,
-                _text_digest(last_translation.translated_text),
-            ),
         )
 
         rows = [
@@ -2111,12 +2116,11 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
         )
 
         full_text = _joined_translation_text(translated_pairs)
-        st.text_area(
+        _render_readable_text_box(
+            st,
             _t("joined_live_text"),
-            value=full_text,
-            height=260,
-            disabled=True,
-            key=_unique_widget_key("live_joined_translation", state.get("job_id"), done, _text_digest(full_text)),
+            full_text,
+            height=_wrapped_text_area_height(full_text, min_height=180, max_height=360),
         )
 
 
@@ -2273,17 +2277,11 @@ def _render_translation_preview(
     st.dataframe(rows, hide_index=True, width="stretch")
     if not compact:
         full_text = _joined_translation_text(translated_pairs)
-        st.text_area(
+        _render_readable_text_box(
+            st,
             _t("joined_saved_text"),
-            value=full_text,
-            height=320,
-            disabled=True,
-            key=_unique_widget_key(
-                "checkpoint_joined_translation",
-                state.get("job_id"),
-                len(translated_pairs),
-                _text_digest(full_text),
-            ),
+            full_text,
+            height=_wrapped_text_area_height(full_text, min_height=180, max_height=420),
         )
 
 
@@ -2294,13 +2292,32 @@ def _short_text(text: str, limit: int) -> str:
     return f"{collapsed[:limit]}…"
 
 
-def _wrapped_text_area_height(*texts: object, min_height: int = 180, max_height: int = 520) -> int:
+def _wrapped_text_area_height(
+    *texts: object,
+    min_height: int = 120,
+    max_height: int = 420,
+    chars_per_line: int = 92,
+) -> int:
     visual_lines = 0
     for text in texts:
         raw_lines = str(text or "").splitlines() or [""]
         for line in raw_lines:
-            visual_lines += max(1, (len(line) + 84) // 85)
-    return min(max_height, max(min_height, 76 + visual_lines * 24))
+            visual_lines += max(1, (len(line) + chars_per_line - 1) // chars_per_line)
+    return min(max_height, max(min_height, 64 + visual_lines * 24))
+
+
+def _render_readable_text_box(parent: object, label: str, text: object, *, height: int) -> None:
+    parent.markdown(label)
+    body = html.escape(str(text or ""))
+    with parent.container(border=True, height=height):
+        st.markdown(
+            (
+                "<div style=\"white-space: pre-wrap; overflow-wrap: anywhere; "
+                "color: var(--text-color); font-size: 1rem; line-height: 1.45;\">"
+                f"{body}</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 def _joined_translation_text(translated_pairs: list[tuple[object, object]]) -> str:
@@ -2453,22 +2470,20 @@ def _render_human_review(state: dict) -> None:
             review_preview_height = _wrapped_text_area_height(
                 segment.source_text,
                 translation.translated_text,
-                min_height=220,
-                max_height=560,
+                min_height=120,
+                max_height=320,
             )
-            left.text_area(
+            _render_readable_text_box(
+                left,
                 _t("source"),
-                value=segment.source_text,
+                segment.source_text,
                 height=review_preview_height,
-                disabled=True,
-                key=f"source_review_{segment_id}",
             )
-            right.text_area(
+            _render_readable_text_box(
+                right,
                 _t("current_translation"),
-                value=translation.translated_text,
+                translation.translated_text,
                 height=review_preview_height,
-                disabled=True,
-                key=f"current_translation_review_{segment_id}",
             )
 
             _render_operator_phrase_refinement(
@@ -2484,8 +2499,8 @@ def _render_human_review(state: dict) -> None:
                 key=edit_key,
                 height=_wrapped_text_area_height(
                     st.session_state.get(edit_key, translation.translated_text),
-                    min_height=220,
-                    max_height=560,
+                    min_height=120,
+                    max_height=360,
                 ),
             )
 
