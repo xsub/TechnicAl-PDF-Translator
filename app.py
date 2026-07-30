@@ -107,6 +107,14 @@ UI_TEXT = {
         "pdf_status_download": "pobierz",
         "pdf_status_missing": "brak pliku",
         "review_findings_caption": "Uwagi recenzenta: `{review_findings}`.",
+        "review_findings_empty": "Brak zapisanych uwag recenzenta.",
+        "review_finding_col_severity": "waga",
+        "review_finding_col_category": "typ",
+        "review_finding_col_source": "fragment źródła",
+        "review_finding_col_translation": "fragment tłumaczenia",
+        "review_finding_col_explanation": "uwaga",
+        "review_finding_col_proposal": "propozycja poprawki",
+        "review_finding_col_confidence": "pewność recenzji",
         "parallelism_change_pending": (
             "Suwaki UI ustawione na `{ui_translation}/{ui_review}`, ale aktualny checkpoint joba ma "
             "`{job_translation}/{job_review}`. Zmiana zadziała przy następnym wznowieniu albo nowym zadaniu; "
@@ -276,6 +284,14 @@ UI_TEXT = {
         "pdf_status_download": "download",
         "pdf_status_missing": "missing file",
         "review_findings_caption": "Review findings: `{review_findings}`.",
+        "review_findings_empty": "No reviewer findings saved yet.",
+        "review_finding_col_severity": "severity",
+        "review_finding_col_category": "type",
+        "review_finding_col_source": "source evidence",
+        "review_finding_col_translation": "translation evidence",
+        "review_finding_col_explanation": "review note",
+        "review_finding_col_proposal": "proposed fix",
+        "review_finding_col_confidence": "review confidence",
         "parallelism_change_pending": (
             "The UI sliders are set to `{ui_translation}/{ui_review}`, but this job checkpoint has "
             "`{job_translation}/{job_review}`. The change applies on the next resume or new job; "
@@ -689,6 +705,66 @@ def _issue_label(issue: object) -> str:
     return f"{severity} - {issue_type}: {message}"
 
 
+def _review_findings_count(state: dict) -> int:
+    return sum(len(getattr(result, "findings", []) or []) for result in state.get("review_results", {}).values())
+
+
+def _review_findings_rows(state: dict) -> list[dict[str, object]]:
+    segments_by_id = {segment.segment_id: segment for segment in state.get("segments", [])}
+    translations = state.get("translations", {})
+    rows = []
+
+    for result in state.get("review_results", {}).values():
+        result_segment_id = str(getattr(result, "segment_id", "") or "")
+        for finding in getattr(result, "findings", []) or []:
+            segment_id = str(getattr(finding, "segment_id", result_segment_id) or result_segment_id)
+            segment = segments_by_id.get(segment_id)
+            translation = translations.get(segment_id)
+            source_evidence = str(getattr(finding, "source_evidence", "") or getattr(segment, "source_text", ""))
+            translation_evidence = str(
+                getattr(finding, "translation_evidence", "") or getattr(translation, "translated_text", "")
+            )
+
+            rows.append(
+                {
+                    "#": len(rows) + 1,
+                    _t("segment_col"): segment_id or "-",
+                    _t("page_col"): getattr(segment, "page_number", "-"),
+                    _t("review_finding_col_severity"): _localized_severity(str(getattr(finding, "severity", "info"))),
+                    _t("review_finding_col_category"): _localized_issue_type(
+                        str(getattr(finding, "category", "issue"))
+                    ),
+                    _t("review_finding_col_source"): _short_text(source_evidence, 220),
+                    _t("review_finding_col_translation"): _short_text(translation_evidence, 260),
+                    _t("review_finding_col_explanation"): _short_text(
+                        _localized_issue_message(str(getattr(finding, "explanation", ""))),
+                        320,
+                    ),
+                    _t("review_finding_col_proposal"): _short_text(
+                        str(getattr(finding, "proposed_translation", "") or ""),
+                        260,
+                    ),
+                    _t("review_finding_col_confidence"): str(getattr(finding, "confidence", "-") or "-"),
+                }
+            )
+
+    return list(reversed(rows))
+
+
+def _render_review_findings_table(state: dict) -> None:
+    rows = _review_findings_rows(state)
+    if not rows:
+        st.caption(_t("review_findings_empty"))
+        return
+
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        height=min(520, 140 + 32 * min(len(rows), 12)),
+    )
+
+
 def _localized_severity(severity: str) -> str:
     severity = severity.lower()
     if _ui_language() == "pl":
@@ -1075,6 +1151,7 @@ def _make_progress_callback(
                 len(preview_state.get("segments", [])),
                 translations_count,
                 len(preview_state.get("review_results", {})),
+                _review_findings_count(preview_state),
                 usage["total_tokens"],
                 usage["requests"],
                 preview_state.get("llm_inflight"),
@@ -1299,7 +1376,7 @@ def _render_status(state: dict) -> None:
     reviews_done = counts["reviews_done"]
     translation_percent = _progress_percent(translations_done, segments_total)
     review_percent = _progress_percent(reviews_done, segments_total)
-    review_findings = sum(len(result.findings) for result in state.get("review_results", {}).values())
+    review_findings = _review_findings_count(state)
     unresolved_segments = state.get("unresolved_segments", [])
 
     cols = st.columns(6)
@@ -1355,6 +1432,7 @@ def _render_status(state: dict) -> None:
             ),
         )
     st.caption(_t("review_findings_caption", review_findings=review_findings))
+    _render_review_findings_table(state)
     _render_token_usage_metrics(state)
     st.caption(
         _t(
@@ -1385,6 +1463,9 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
     with st.container(border=True):
         st.markdown(f"#### :material/visibility: {title}")
         _render_token_usage_metrics(state)
+        review_findings = _review_findings_count(state)
+        st.caption(_t("review_findings_caption", review_findings=review_findings))
+        _render_review_findings_table(state)
         st.progress(
             min(max(progress_ratio, 0.0), 1.0),
             text=_t("translated_saved", done=done, total=total or "?"),
