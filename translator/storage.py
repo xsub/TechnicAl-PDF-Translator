@@ -172,7 +172,22 @@ def _state_from_payload(payload_json: str) -> TranslationState:
     else:
         raw["output_verification"] = None
 
+    _normalize_recoverable_status(raw)
     return cast(TranslationState, raw)
+
+
+def _normalize_recoverable_status(raw: dict) -> None:
+    status = str(raw.get("status") or "")
+    segments_count = len(raw.get("segments", []) or [])
+    translations_count = len(raw.get("translations", {}) or {})
+    review_results_count = len(raw.get("review_results", {}) or {})
+
+    if status.startswith("translating") and segments_count and translations_count >= segments_count:
+        raw["status"] = "segments_translated"
+        return
+
+    if status.startswith("reviewing") and translations_count and review_results_count >= translations_count:
+        raw["status"] = "translation_reviewed"
 
 
 def build_report(state: TranslationState, report_path: str | Path | None = None) -> JobReport:

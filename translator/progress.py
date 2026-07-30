@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from translator.debug import log_debug
+from translator.debug import log_debug, log_exception
 
 
 ProgressEvent = dict[str, Any]
@@ -32,4 +32,16 @@ def emit_progress(
     if progress_callback is None:
         return
 
-    progress_callback(event)
+    try:
+        progress_callback(event)
+    except Exception as exc:  # noqa: BLE001 - UI progress must not interrupt the workflow
+        log_exception(
+            "progress.callback.error",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            stage=stage,
+            message=message,
+            current=current,
+            total=total,
+            segment_id=segment_id,
+        )

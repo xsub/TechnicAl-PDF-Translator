@@ -5,6 +5,7 @@ import os
 import re
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
+from itertools import count
 from pathlib import Path
 
 import streamlit as st
@@ -22,6 +23,7 @@ load_dotenv(override=True)
 STORAGE_INPUT = Path("storage/input")
 STORAGE_OUTPUT = Path("storage/output")
 PACKAGE_NAME = "tech-translator-agent"
+WIDGET_KEY_COUNTER = count()
 
 PROVIDER_LABELS = {
     "pl": {
@@ -341,6 +343,9 @@ UI_TEXT = {
 
 def _init_session_state() -> None:
     st.session_state.setdefault("last_error", None)
+    if _is_stale_preview_key_error(st.session_state.get("last_error")):
+        st.session_state["last_error"] = None
+
     if "translation_state" not in st.session_state:
         latest_state = _load_latest_checkpoint(silent=True)
         st.session_state["translation_state"] = latest_state
@@ -352,6 +357,17 @@ def _init_session_state() -> None:
 def _ui_language() -> str:
     value = str(st.session_state.get("ui_language") or "pl").lower()
     return value if value in UI_TEXT else "pl"
+
+
+def _is_stale_preview_key_error(error: object) -> bool:
+    text = str(error or "")
+    return (
+        "multiple elements with the same key" in text
+        and (
+            "live_joined_translation" in text
+            or "checkpoint_joined_translation" in text
+        )
+    )
 
 
 def _t(text_key: str, **kwargs: object) -> str:
@@ -811,6 +827,7 @@ def _make_progress_callback(
             )
             if preview_key != last_preview_key["value"]:
                 last_preview_key["value"] = preview_key
+                live_preview_slot.empty()
                 with live_preview_slot.container():
                     _render_live_translation_preview(
                         preview_state,
@@ -1023,7 +1040,7 @@ def _render_live_translation_preview(state: dict, *, title: str) -> None:
             value=full_text,
             height=260,
             disabled=True,
-            key=f"live_joined_translation_{state.get('job_id')}_{done}_{_text_digest(full_text)}",
+            key=_unique_widget_key("live_joined_translation", state.get("job_id"), done, _text_digest(full_text)),
         )
 
 
@@ -1167,7 +1184,12 @@ def _render_translation_preview(
             value=full_text,
             height=320,
             disabled=True,
-            key=f"checkpoint_joined_translation_{state.get('job_id')}_{len(translated_pairs)}_{_text_digest(full_text)}",
+            key=_unique_widget_key(
+                "checkpoint_joined_translation",
+                state.get("job_id"),
+                len(translated_pairs),
+                _text_digest(full_text),
+            ),
         )
 
 
@@ -1190,6 +1212,11 @@ def _joined_translation_text(translated_pairs: list[tuple[object, object]]) -> s
 
 def _text_digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _unique_widget_key(prefix: str, *parts: object) -> str:
+    stable_part = "_".join(str(part) for part in parts)
+    return f"{prefix}_{next(WIDGET_KEY_COUNTER)}_{stable_part}"
 
 
 def _render_human_review(state: dict) -> None:
