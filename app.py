@@ -2718,13 +2718,20 @@ def _render_human_review(state: dict) -> None:
         st.info(_t("no_segments_filter"))
         return
 
-    max_to_show = st.slider(
-        _t("segments_to_show"),
-        min_value=1,
-        max_value=min(50, len(filtered_segments)),
-        value=min(10, len(filtered_segments)),
-        key="review_limit",
-    )
+    review_limit_max = min(50, len(filtered_segments))
+    if review_limit_max <= 1:
+        max_to_show = 1
+        st.session_state["review_limit"] = 1
+    else:
+        current_review_limit = int(st.session_state.get("review_limit", min(10, review_limit_max)) or 1)
+        st.session_state["review_limit"] = min(max(current_review_limit, 1), review_limit_max)
+        max_to_show = st.slider(
+            _t("segments_to_show"),
+            min_value=1,
+            max_value=review_limit_max,
+            value=st.session_state["review_limit"],
+            key="review_limit",
+        )
 
     decisions = {}
     for index, segment_id in enumerate(filtered_segments[:max_to_show]):
