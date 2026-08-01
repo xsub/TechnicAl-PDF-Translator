@@ -17,6 +17,7 @@ def render_pdf(state: TranslationState) -> TranslationState:
         state.get("translations", {}),
         output_path,
         title=f"Translated {Path(config.source_pdf_path).name}",
+        source_pdf_path=config.source_pdf_path,
     )
     return {**state, "output_pdf_path": str(output_path), "status": "pdf_rendered"}
 
@@ -31,4 +32,3 @@ def verify_output(state: TranslationState) -> TranslationState:
         "output_verification": verification,
         "status": "completed" if verification.ok else "completed_with_output_warnings",
     }
-

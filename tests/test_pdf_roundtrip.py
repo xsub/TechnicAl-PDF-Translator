@@ -6,6 +6,7 @@ from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from pypdf import PdfReader
 
 from translator.pdf.output_validator import verify_output_pdf
 from translator.pdf.parser import PDFParser
@@ -43,6 +44,34 @@ class PDFRoundtripTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertTrue(verification.ok, verification.messages)
 
+    def test_overlay_render_preserves_source_page_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            source = temp / "source.pdf"
+            output = temp / "translated_overlay.pdf"
+            _make_sample_pdf(source)
+
+            segments, _ = PDFParser().extract(source)
+            translations = {
+                segment.segment_id: TranslationResult(
+                    segment_id=segment.segment_id,
+                    translated_text=segment.source_text.replace(
+                        "Declaration of compliance",
+                        "Deklaracja zgodności",
+                    ),
+                    confidence="high",
+                )
+                for segment in segments
+            }
+
+            render_translated_pdf(segments, translations, output, source_pdf_path=source)
+
+            source_reader = PdfReader(str(source))
+            output_reader = PdfReader(str(output))
+            self.assertEqual(len(output_reader.pages), len(source_reader.pages))
+            self.assertEqual(output_reader.pages[0].mediabox, source_reader.pages[0].mediabox)
+            self.assertIn("Deklaracja zgodności", output_reader.pages[0].extract_text())
+
 
 def _make_sample_pdf(path: Path) -> None:
     pdf = canvas.Canvas(str(path), pagesize=A4)
@@ -56,4 +85,3 @@ def _make_sample_pdf(path: Path) -> None:
 
 if __name__ == "__main__":
     unittest.main()
-
